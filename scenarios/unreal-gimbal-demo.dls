@@ -1,0 +1,8 @@
+# Run this scenario while unreal-gimbal-01 is connected.
+# delay-ms COMMAND device-id message-type sequence payload-hex
+0 SEND unreal-gimbal-01 4097 1001 01
+300 SEND unreal-gimbal-01 4098 1002 -
+700 SEND unreal-gimbal-01 4099 1003 11941F40
+2500 SEND unreal-gimbal-01 4100 1004 -
+3000 SEND unreal-gimbal-01 4101 1005 -
+300 SEND unreal-gimbal-01 4102 1006 -

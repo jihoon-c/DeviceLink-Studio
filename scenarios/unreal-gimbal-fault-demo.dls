@@ -1,0 +1,16 @@
+# Run this scenario while unreal-gimbal-01 is connected.
+# Device faults: 1=Motor Stall, 2=Over Temperature, 3=Sensor Failure, 0=Clear.
+# Response modes: 0=Normal, 1=Delayed, 2=No Response; final uint16 is delay milliseconds.
+0 SEND unreal-gimbal-01 4097 2001 01
+200 SEND unreal-gimbal-01 4103 2002 02
+100 SEND unreal-gimbal-01 4102 2003 -
+1500 SEND unreal-gimbal-01 4103 2004 00
+200 SEND unreal-gimbal-01 4103 2005 03
+100 SEND unreal-gimbal-01 4102 2006 -
+1500 SEND unreal-gimbal-01 4103 2007 00
+200 SEND unreal-gimbal-01 4104 2008 0103E8
+100 SEND unreal-gimbal-01 4102 2009 -
+1500 SEND unreal-gimbal-01 4104 2010 020000
+100 SEND unreal-gimbal-01 4102 2011 -
+1500 SEND unreal-gimbal-01 4104 2012 000000
+100 SEND unreal-gimbal-01 4102 2013 -

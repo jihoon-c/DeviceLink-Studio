@@ -1,0 +1,10 @@
+[
+	{
+		"file": "F:\\GitHubRep\\UnrealVirtualDevice\\Source\\UnrealVirtualDevice\\UnrealVirtualDevice.cpp",
+		"arguments": [
+			"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+			"@F:\\GitHubRep\\UnrealVirtualDevice\\.vscode\\compileCommands_Default\\UnrealVirtualDevice.0.rsp"
+		],
+		"directory": "F:\\UE_5.8\\Engine\\Source"
+	}
+]

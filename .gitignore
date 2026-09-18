@@ -1,0 +1,25 @@
+# CMake / MSVC output
+/build*/
+/out/
+/.vs/
+/.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.sqlite
+*.settings
+*.log
+
+# Unreal generated output (keep Config, Content, Source, and the .uproject)
+/UnrealVirtualDevice/Binaries/
+/UnrealVirtualDevice/DerivedDataCache/
+/UnrealVirtualDevice/Intermediate/
+/UnrealVirtualDevice/Saved/
+*.sln
+*.slnx
+*.code-workspace
+
+# OS/editor files
+.DS_Store
+Thumbs.db
