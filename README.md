@@ -1,13 +1,26 @@
 # DeviceLink Studio
 
-Windows C++20 기반의 프로토콜 독립형 장비 통신 및 SILS 스타일 테스트 환경입니다.
-TCP 바이트 전송, 프레임 검증, 장비 상태 관리, 이벤트 기반 UI 바인딩, 콘솔 시뮬레이터와
-자동화 시나리오 실행을 분리된 계층으로 제공합니다.
+> **Unreal 가상 EO/IR 장비와 Windows MFC 관제 콘솔을 TCP로 연결한 C++20 SILS 포트폴리오**
 
-> **포트폴리오 핵심 목적**: 실제 하드웨어를 판매·제어하는 제품이 아니라, Unreal Engine 내부의
-> EO/IR 가상 장비와 Windows MFC 연결 프로그램을 결합해 실무 장비통신 개발 역량을 증명하는
-> SILS형 포트폴리오입니다. 즉 Unreal은 장비/현장/고장 조건을 재현하고, DeviceLink Studio는
-> 연결·명령·수신·상태관리·알람·기록·자동시험을 담당합니다.
+DeviceLink Studio는 방산·산업 장비 통신 소프트웨어의 설계와 검증 방식을 재현한 Windows C++20
+프로젝트입니다. Unreal Engine 안에서 고정형 EO/IR 감시 카메라와 드론 탑재 EO/IR 장비, 현장 레벨,
+통신·장비 고장 상황을 가상으로 재현하고, Windows MFC 프로그램은 장비 연결·운용 명령·상태 감시·알람·
+이력·자동 시험을 담당합니다.
+
+실제 하드웨어를 직접 제어하는 제품이 아니라, **가상 장비와 연결 프로그램을 분리해 검증하는 SILS
+(Software-In-the-Loop Simulation) 환경**입니다. 따라서 특정 제조사나 실제 장비 유무와 무관하게
+통신 계층, protocol, 상태 전이, 멀티스레드 안전 종료, UI 이벤트 흐름을 실무에 가까운 구조로 보여주는
+것이 목표입니다.
+
+### 이 프로젝트에서 보여주는 역량
+
+- **통신 안정성**: Winsock2 기반 TCP 연결, 송신 큐, 수신 worker, timeout·자동 재접속·안전 종료
+- **계층형 설계**: UI → Application → Core → Protocol → Transport → Infrastructure 의존성 분리
+- **장비 추상화**: Transport는 raw byte만 전송하고, 장비 명령·ACK·Telemetry 변환은 교체 가능한
+  Protocol Adapter가 담당
+- **운용 소프트웨어**: MFC 관제 화면에서 고정카메라/드론 모드를 선택하고 실시간 상태·품질·알람·이력을 확인
+- **시험 자동화**: 고장 주입, Record & Replay, `.dls` 시나리오, Markdown 시험 보고서, 통합 Soak 테스트
+- **Unreal 통합**: 고정형 짐벌의 Pan/Tilt·Scan과 드론의 이륙·좌표 이동·귀환·착륙을 동일 TCP 계약으로 검증
 
 ## 현재 구현 범위
 
