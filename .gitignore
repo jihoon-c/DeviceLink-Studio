@@ -23,3 +23,7 @@
 # OS/editor files
 .DS_Store
 Thumbs.db
+
+# Python generated output
+__pycache__/
+*.py[cod]

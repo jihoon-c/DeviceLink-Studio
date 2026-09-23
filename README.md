@@ -181,6 +181,33 @@ Unreal 가상장비를 자동 시작하고 전원, 각도, 상태 요청, ACK, T
 검증한 다음 자신이 시작한 Unreal 프로세스를 종료합니다. 기본 250사이클이며 첫 번째 인자로
 사이클 수, 두 번째 인자로 포트를 지정할 수 있습니다.
 
+## LLM Agent · MCP 운용
+
+자연어로 Unreal 가상 EO/IR을 운용하고 Fault 복구 시험을 실행할 수 있습니다.
+
+```text
+Codex Agent → MCP Server → C++ Agent Bridge → Application → Protocol → TCP → Unreal EO/IR
+```
+
+### 빠른 실행 순서
+
+1. 최초 1회 `DeviceLinkAgentBridge`를 빌드하고 Codex에 `devicelink` STDIO MCP 서버를 등록합니다.
+2. `run-unreal-virtual-device.bat`를 실행해 `127.0.0.1:5000` 가상장비를 시작합니다.
+3. Codex에서 `/mcp`로 `devicelink` 연결을 확인합니다.
+4. 다음과 같이 자연어로 운용합니다.
+
+```text
+127.0.0.1:5000의 EO/IR에 연결하고 Pan 30도, Tilt -10도로 이동한 다음 Telemetry를 확인해줘.
+```
+
+```text
+Motor Stall이 무엇인지 매뉴얼에서 찾아 설명하고, 실제로 주입한 뒤 정상 복구되는지 시험해줘.
+```
+
+MCP 서버와 C++ 브리지는 Codex가 자동으로 실행합니다. 사용자는 Unreal 가상장비만 먼저 실행하면 됩니다.
+빌드, Codex 등록, 각 프로세스의 역할, 장비 운용, Fault·RAG·시험 절차와 문제 해결은
+[`docs/DEVICE_AGENT_MCP_KR.md`](docs/DEVICE_AGENT_MCP_KR.md)를 참고하세요.
+
 ## Operating Guide (English)
 
 ### Prerequisites

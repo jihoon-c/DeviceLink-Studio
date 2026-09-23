@@ -88,6 +88,7 @@ endif()
 add_library(DeviceLinkApplication STATIC
     src/Application/AxisVapixCommandAdapter.cpp
     src/Application/CommunicationAlarmService.cpp
+    src/Application/DeviceAgentService.cpp
     src/Application/DeviceEventProcessingService.cpp
     src/Application/DeviceEventPersistence.cpp
     src/Application/DeviceEventQueue.cpp
@@ -201,6 +202,17 @@ target_link_libraries(DeviceLinkUnrealSoak PRIVATE DeviceLinkApplication DeviceL
 
 if(MSVC)
     target_compile_options(DeviceLinkUnrealSoak PRIVATE /W4 /permissive- /EHsc)
+endif()
+
+add_executable(DeviceLinkAgentBridge
+    src/AgentBridge/AgentBridgeMain.cpp
+)
+target_compile_features(DeviceLinkAgentBridge PRIVATE cxx_std_20)
+target_compile_definitions(DeviceLinkAgentBridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(DeviceLinkAgentBridge PRIVATE DeviceLinkApplication DeviceLinkTransport ws2_32)
+
+if(MSVC)
+    target_compile_options(DeviceLinkAgentBridge PRIVATE /W4 /permissive- /EHsc)
 endif()
 
 include(CTest)
