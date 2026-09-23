@@ -22,6 +22,12 @@ bool ADeviceLinkPlayerController::TryGetAutomationListenPort(
 		|| UDeviceLinkStartupWidget::TryParseListenPort(PortText, OutListenPort);
 }
 
+bool ADeviceLinkPlayerController::ShouldAllowLanConnections(const TCHAR* CommandLine)
+{
+	return CommandLine != nullptr
+		&& FParse::Param(CommandLine, TEXT("DeviceLinkAllowLan"));
+}
+
 void ADeviceLinkPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
@@ -40,7 +46,8 @@ void ADeviceLinkPlayerController::BeginPlay()
 			FPlatformMisc::RequestExit(false);
 			return;
 		}
-		HandleStartupConfirmed(AutomationPort);
+		const bool bAllowLanConnections = ShouldAllowLanConnections(FCommandLine::Get());
+		HandleStartupConfirmed(AutomationPort, bAllowLanConnections);
 		return;
 	}
 
@@ -67,7 +74,8 @@ void ADeviceLinkPlayerController::BeginPlay()
 	UE_LOG(LogTemp, Display, TEXT("DeviceLink startup widget displayed."));
 }
 
-void ADeviceLinkPlayerController::HandleStartupConfirmed(const int32 ListenPort)
+void ADeviceLinkPlayerController::HandleStartupConfirmed(
+	const int32 ListenPort, const bool bAllowLanConnections)
 {
 	AVirtualGimbalDevice* Device = nullptr;
 	for (TActorIterator<AVirtualGimbalDevice> Iterator(GetWorld()); Iterator; ++Iterator)
@@ -76,7 +84,8 @@ void ADeviceLinkPlayerController::HandleStartupConfirmed(const int32 ListenPort)
 		break;
 	}
 
-	if (!IsValid(Device) || !Device->ApplyEndpointConfiguration(ListenPort))
+	if (!IsValid(Device)
+		|| !Device->ApplyEndpointConfiguration(ListenPort, bAllowLanConnections))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Could not apply the DeviceLink endpoint configuration."));
 		return;
@@ -89,5 +98,7 @@ void ADeviceLinkPlayerController::HandleStartupConfirmed(const int32 ListenPort)
 	}
 	bShowMouseCursor = false;
 	SetInputMode(FInputModeGameOnly());
-	UE_LOG(LogTemp, Display, TEXT("DeviceLink simulation started on 127.0.0.1:%d."), ListenPort);
+	UE_LOG(LogTemp, Display, TEXT("DeviceLink simulation started on %s:%d."),
+		bAllowLanConnections ? TEXT("0.0.0.0") : TEXT("127.0.0.1"),
+		ListenPort);
 }

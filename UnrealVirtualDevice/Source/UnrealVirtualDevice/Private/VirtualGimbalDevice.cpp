@@ -140,9 +140,10 @@ void AVirtualGimbalDevice::Tick(const float DeltaTime)
 	UpdateVisualState();
 }
 
-bool AVirtualGimbalDevice::ApplyEndpointConfiguration(const int32 ListenPort)
+bool AVirtualGimbalDevice::ApplyEndpointConfiguration(
+	const int32 ListenPort, const bool bAllowLanConnections)
 {
-	return Network->StartListening(ListenPort);
+	return Network->StartListening(ListenPort, bAllowLanConnections);
 }
 
 void AVirtualGimbalDevice::HandleMessage(const FVirtualDeviceMessage& Message)

@@ -14,12 +14,13 @@ class UNREALVIRTUALDEVICE_API ADeviceLinkPlayerController final : public APlayer
 
 public:
 	static bool TryGetAutomationListenPort(const TCHAR* CommandLine, int32& OutListenPort);
+	static bool ShouldAllowLanConnections(const TCHAR* CommandLine);
 
 protected:
 	virtual void BeginPlay() override;
 
 private:
-	void HandleStartupConfirmed(int32 ListenPort);
+	void HandleStartupConfirmed(int32 ListenPort, bool bAllowLanConnections);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDeviceLinkStartupWidget> StartupWidget;

@@ -24,7 +24,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaTime) override;
-	bool ApplyEndpointConfiguration(int32 ListenPort);
+	bool ApplyEndpointConfiguration(int32 ListenPort, bool bAllowLanConnections);
 
 private:
 	void HandleMessage(const FVirtualDeviceMessage& Message);

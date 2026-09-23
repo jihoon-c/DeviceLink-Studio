@@ -2,10 +2,16 @@
 setlocal
 
 set "PROJECT_DIRECTORY=%~dp0"
-set "CMAKE_EXECUTABLE=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-set "NINJA_EXECUTABLE=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
-set "VCVARS_SCRIPT=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+set "CMAKE_EXECUTABLE="
+set "NINJA_EXECUTABLE="
+set "VCVARS_SCRIPT="
 set "BUILD_DIRECTORY=%PROJECT_DIRECTORY%build-mfc-host-ninja"
+
+for %%V in (18 2022) do for %%E in (Community Professional Enterprise BuildTools) do (
+    if not defined CMAKE_EXECUTABLE if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" set "CMAKE_EXECUTABLE=%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if not defined NINJA_EXECUTABLE if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe" set "NINJA_EXECUTABLE=%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+    if not defined VCVARS_SCRIPT if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS_SCRIPT=%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat"
+)
 
 if not exist "%CMAKE_EXECUTABLE%" (
     echo [ERROR] CMake was not found: %CMAKE_EXECUTABLE%

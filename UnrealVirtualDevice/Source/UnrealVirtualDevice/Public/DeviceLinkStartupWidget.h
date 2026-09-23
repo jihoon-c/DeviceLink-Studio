@@ -6,10 +6,11 @@
 #include "DeviceLinkStartupWidget.generated.h"
 
 class SEditableTextBox;
+class SCheckBox;
 class STextBlock;
 class FReply;
 
-DECLARE_DELEGATE_OneParam(FOnDeviceLinkStartupConfirmed, int32);
+DECLARE_DELEGATE_TwoParams(FOnDeviceLinkStartupConfirmed, int32, bool);
 
 UCLASS()
 class UNREALVIRTUALDEVICE_API UDeviceLinkStartupWidget final : public UUserWidget
@@ -29,6 +30,7 @@ private:
 	FReply HandleStartClicked();
 
 	TSharedPtr<SEditableTextBox> PortTextBox;
+	TSharedPtr<SCheckBox> AllowLanCheckBox;
 	TSharedPtr<STextBlock> ValidationText;
 	FOnDeviceLinkStartupConfirmed StartupConfirmedHandler;
 };

@@ -2,6 +2,7 @@
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -89,8 +90,21 @@ TSharedRef<SWidget> UDeviceLinkStartupWidget::RebuildWidget()
 					.Padding(0.0F, 4.0F)
 					[
 						SNew(STextBlock)
-						.Text(FText::FromString(TEXT("바인딩 주소   127.0.0.1  (로컬 전용)")))
+						.Text(FText::FromString(TEXT("기본 바인딩   127.0.0.1  (로컬 전용)")))
 						.Font(BodyFont)
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0.0F, 4.0F, 0.0F, 8.0F)
+					[
+						SAssignNew(AllowLanCheckBox, SCheckBox)
+						.IsChecked(ECheckBoxState::Unchecked)
+						[
+							SNew(STextBlock)
+							.Text(FText::FromString(TEXT(
+								"같은 네트워크의 다른 PC 접속 허용 (0.0.0.0)")))
+							.Font(BodyFont)
+						]
 					]
 					+ SVerticalBox::Slot()
 					.AutoHeight()
@@ -144,7 +158,8 @@ TSharedRef<SWidget> UDeviceLinkStartupWidget::RebuildWidget()
 					[
 						SNew(STextBlock)
 						.Text(FText::FromString(TEXT(
-							"시작 후 DeviceLink Studio에서 위 주소와 포트로 연결하세요.\n"
+							"로컬 테스트는 127.0.0.1, 노트북 테스트는 데스크톱 IPv4로 연결하세요.\n"
+							"LAN 허용은 신뢰할 수 있는 개인 네트워크에서만 사용하세요.\n"
 							"상태등: 빨강=전원 꺼짐/고장, 초록=준비, 노랑=초기화/스캔")))
 						.Font(BodyFont)
 						.ColorAndOpacity(FLinearColor(0.65F, 0.72F, 0.78F))
@@ -158,6 +173,7 @@ TSharedRef<SWidget> UDeviceLinkStartupWidget::RebuildWidget()
 void UDeviceLinkStartupWidget::NativeDestruct()
 {
 	StartupConfirmedHandler.Unbind();
+	AllowLanCheckBox.Reset();
 	PortTextBox.Reset();
 	ValidationText.Reset();
 	Super::NativeDestruct();
@@ -168,6 +184,8 @@ FReply UDeviceLinkStartupWidget::HandleStartClicked()
 	const FString PortText = PortTextBox.IsValid()
 		? PortTextBox->GetText().ToString()
 		: FString();
+	const bool bAllowLanConnections = AllowLanCheckBox.IsValid()
+		&& AllowLanCheckBox->GetCheckedState() == ECheckBoxState::Checked;
 	int32 ListenPort = 0;
 	if (!PortTextBox.IsValid()
 		|| !TryParseListenPort(PortText, ListenPort))
@@ -183,6 +201,6 @@ FReply UDeviceLinkStartupWidget::HandleStartClicked()
 	{
 		ValidationText->SetText(FText::GetEmpty());
 	}
-	StartupConfirmedHandler.ExecuteIfBound(ListenPort);
+	StartupConfirmedHandler.ExecuteIfBound(ListenPort, bAllowLanConnections);
 	return FReply::Handled();
 }

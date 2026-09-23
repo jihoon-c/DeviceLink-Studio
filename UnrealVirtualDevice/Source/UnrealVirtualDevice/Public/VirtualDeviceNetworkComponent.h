@@ -29,7 +29,7 @@ public:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 	bool SendMessage(const FVirtualDeviceMessage& Message);
-	bool StartListening(int32 InListenPort);
+	bool StartListening(int32 InListenPort, bool bInAllowLanConnections = false);
 	bool IsClientConnected() const;
 	FOnVirtualDeviceMessageReceived& OnMessageReceived();
 
@@ -39,6 +39,9 @@ private:
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Network")
 	bool bStartAutomatically = true;
+
+	UPROPERTY(EditAnywhere, Category="DeviceLink|Network")
+	bool bAllowLanConnections = false;
 
 	TSharedPtr<FVirtualDeviceTcpServer> Server;
 	TArray<uint8> ReceiveFrameBuffer;

@@ -70,6 +70,21 @@ run-unreal-integration-soak.bat 1000 5510
 5. 연결 상태가 `연결됨`으로 바뀌고 `TELEMETRY` 항목이 0.5초마다 추가되는지 확인한다.
 6. 다음 표의 순서로 기능을 확인한다.
 
+### 두 PC LAN 통합 시험
+
+1. 데스크톱과 노트북을 같은 개인 네트워크에 연결한다.
+2. 데스크톱에서 `setup-lan-firewall.bat`를 한 번 실행한다.
+3. 데스크톱에서 `run-unreal-lan-device.bat`를 실행하고 표시된 IPv4 주소를 기록한다.
+4. 노트북에서 MFC를 실행해 Host에 데스크톱 IPv4, Port에 `5000`을 입력한다.
+5. 연결 후 ACK와 0.5초 Telemetry 수신을 확인한다.
+6. 조이스틱을 움직여 노트북의 목표 각도, TX/RX 목록, 데스크톱 Unreal 짐벌 움직임을 비교한다.
+7. 데스크톱 Unreal을 종료해 MFC의 통신 오류·Heartbeat Fault·자동 재접속을 확인한다.
+8. Unreal을 같은 명령으로 다시 실행해 연결 복구를 확인한다.
+
+LAN 실행은 `-DeviceLinkAllowLan`이 지정된 경우에만 `0.0.0.0`으로 바인딩된다. 옵션이 없으면
+`127.0.0.1` 로컬 전용이므로 기존 단일 PC 시험의 보안 범위가 유지된다. Windows 방화벽 규칙도
+Public이 아닌 Private 프로필에만 적용한다.
+
 | 조작 | MFC 확인 | Unreal 확인 |
 | --- | --- | --- |
 | 전원 ON | `0x1001` ACK SUCCESS | 상태등이 Ready 색으로 변경 |

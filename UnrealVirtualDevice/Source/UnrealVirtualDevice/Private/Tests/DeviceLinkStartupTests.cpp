@@ -38,6 +38,15 @@ bool FDeviceLinkStartupPortValidationTest::RunTest(const FString& Parameters)
 			TEXT("-DeviceLinkAutoStart -DeviceLinkPort=70000"), ListenPort));
 	TestFalse(TEXT("Interactive mode is not treated as automation"),
 		ADeviceLinkPlayerController::TryGetAutomationListenPort(TEXT("-game"), ListenPort));
+
+	TestFalse(TEXT("LAN access is opt-in"),
+		ADeviceLinkPlayerController::ShouldAllowLanConnections(
+			TEXT("-DeviceLinkAutoStart -DeviceLinkPort=5000")));
+	TestTrue(TEXT("LAN access flag is recognized"),
+		ADeviceLinkPlayerController::ShouldAllowLanConnections(
+			TEXT("-DeviceLinkAutoStart -DeviceLinkAllowLan -DeviceLinkPort=5000")));
+	TestFalse(TEXT("Null command line keeps local-only mode"),
+		ADeviceLinkPlayerController::ShouldAllowLanConnections(nullptr));
 	return true;
 }
 

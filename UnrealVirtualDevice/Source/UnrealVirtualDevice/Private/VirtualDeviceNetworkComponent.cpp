@@ -61,8 +61,9 @@ public:
 		TArray<uint8> Bytes;
 	};
 
-	explicit FVirtualDeviceTcpServer(const uint16 InListenPort)
+	FVirtualDeviceTcpServer(const uint16 InListenPort, const bool bInAllowLanConnections)
 		: ListenPort(InListenPort)
+		, bAllowLanConnections(bInAllowLanConnections)
 	{
 	}
 
@@ -107,21 +108,27 @@ public:
 			return 1;
 		}
 
-		bool bAddressValid = false;
 		TSharedRef<FInternetAddr> Address = SocketSubsystem->CreateInternetAddr();
-		Address->SetIp(TEXT("127.0.0.1"), bAddressValid);
+		if (bAllowLanConnections)
+		{
+			Address->SetAnyAddress();
+		}
+		else
+		{
+			Address->SetLoopbackAddress();
+		}
 		Address->SetPort(ListenPort);
-		if (!bAddressValid
-			|| !ListenSocket.Get()->SetReuseAddr(true)
+		const TCHAR* BindAddress = bAllowLanConnections ? TEXT("0.0.0.0") : TEXT("127.0.0.1");
+		if (!ListenSocket.Get()->SetReuseAddr(true)
 			|| !ListenSocket.Get()->SetNonBlocking(true)
 			|| !ListenSocket.Get()->Bind(*Address)
 			|| !ListenSocket.Get()->Listen(1))
 		{
-			UE_LOG(LogTemp, Error, TEXT("Could not listen on 127.0.0.1:%u."), ListenPort);
+			UE_LOG(LogTemp, Error, TEXT("Could not listen on %s:%u."), BindAddress, ListenPort);
 			return 1;
 		}
 
-		UE_LOG(LogTemp, Display, TEXT("Virtual device listening on 127.0.0.1:%u."), ListenPort);
+		UE_LOG(LogTemp, Display, TEXT("Virtual device listening on %s:%u."), BindAddress, ListenPort);
 		FScopedSocket ClientSocket;
 		TArray<uint8> ReceiveBuffer;
 		ReceiveBuffer.SetNumUninitialized(64 * 1024);
@@ -281,6 +288,7 @@ private:
 	}
 
 	uint16 ListenPort = 0;
+	bool bAllowLanConnections = false;
 	TAtomic<bool> bRunning{false};
 	TAtomic<bool> bClientConnected{false};
 	TUniquePtr<FRunnableThread> Thread;
@@ -298,7 +306,7 @@ UVirtualDeviceNetworkComponent::~UVirtualDeviceNetworkComponent() = default;
 void UVirtualDeviceNetworkComponent::BeginPlay()
 {
 	Super::BeginPlay();
-	if (bStartAutomatically && !StartListening(ListenPort))
+	if (bStartAutomatically && !StartListening(ListenPort, bAllowLanConnections))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Could not start the default virtual device endpoint."));
 	}
@@ -351,7 +359,8 @@ bool UVirtualDeviceNetworkComponent::SendMessage(const FVirtualDeviceMessage& Me
 		&& Server->EnqueueOutgoing(MoveTemp(Bytes));
 }
 
-bool UVirtualDeviceNetworkComponent::StartListening(const int32 InListenPort)
+bool UVirtualDeviceNetworkComponent::StartListening(
+	const int32 InListenPort, const bool bInAllowLanConnections)
 {
 	if (InListenPort < 1 || InListenPort > MAX_uint16)
 	{
@@ -361,7 +370,9 @@ bool UVirtualDeviceNetworkComponent::StartListening(const int32 InListenPort)
 	Server.Reset();
 	ReceiveFrameBuffer.Reset();
 	ListenPort = InListenPort;
-	Server = MakeShared<FVirtualDeviceTcpServer>(static_cast<uint16>(ListenPort));
+	bAllowLanConnections = bInAllowLanConnections;
+	Server = MakeShared<FVirtualDeviceTcpServer>(
+		static_cast<uint16>(ListenPort), bAllowLanConnections);
 	if (!Server->StartServer())
 	{
 		UE_LOG(LogTemp, Error, TEXT("Could not start the virtual device TCP worker."));
