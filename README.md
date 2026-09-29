@@ -1,308 +1,46 @@
 # DeviceLink Studio
 
-> **Unreal 가상 EO/IR 장비와 Windows MFC 관제 콘솔을 TCP로 연결한 C++20 SILS 포트폴리오**
+> Windows C++20 · MFC · Unreal Engine 5.8 · TCP · SQLite
+> **가상 EO/IR 장비의 운용, 통신 장애 복구, 자동 시험을 한 흐름으로 검증하는 SILS-like 테스트베드**
 
-DeviceLink Studio는 방산·산업 장비 통신 소프트웨어의 설계와 검증 방식을 재현한 Windows C++20
-프로젝트입니다. Unreal Engine 안에서 고정형 EO/IR 감시 카메라와 드론 탑재 EO/IR 장비, 현장 레벨,
-통신·장비 고장 상황을 가상으로 재현하고, Windows MFC 프로그램은 장비 연결·운용 명령·상태 감시·알람·
-이력·자동 시험을 담당합니다.
+Unreal Engine이 고정형 EO/IR 짐벌과 고장 상황을 재현하고, MFC 관제 콘솔이 장비 명령·상태 감시·시험을 수행합니다. 목표는 실제 광학 성능의 재현보다 **장비 통신과 상태 전이, 멀티스레드 처리, 복구 절차의 검증**입니다.
 
-실제 하드웨어를 직접 제어하는 제품이 아니라, **가상 장비와 연결 프로그램을 분리해 검증하는 SILS
-(Software-In-the-Loop Simulation) 환경**입니다. 따라서 특정 제조사나 실제 장비 유무와 무관하게
-통신 계층, protocol, 상태 전이, 멀티스레드 안전 종료, UI 이벤트 흐름을 실무에 가까운 구조로 보여주는
-것이 목표입니다.
+## 핵심 흐름
 
-### 이 프로젝트에서 보여주는 역량
-
-- **통신 안정성**: Winsock2 기반 TCP 연결, 송신 큐, 수신 worker, timeout·자동 재접속·안전 종료
-- **계층형 설계**: UI → Application → Core → Protocol → Transport → Infrastructure 의존성 분리
-- **장비 추상화**: Transport는 raw byte만 전송하고, 장비 명령·ACK·Telemetry 변환은 교체 가능한
-  Protocol Adapter가 담당
-- **운용 소프트웨어**: MFC 관제 화면에서 고정카메라/드론 모드를 선택하고 실시간 상태·품질·알람·이력을 확인
-- **시험 자동화**: 고장 주입, Record & Replay, `.dls` 시나리오, Markdown 시험 보고서, 통합 Soak 테스트
-- **Unreal 통합**: 고정형 짐벌의 Pan/Tilt·Scan과 드론의 이륙·좌표 이동·귀환·착륙을 동일 TCP 계약으로 검증
-
-## 현재 구현 범위
-
-- Winsock2 TCP transport: 연결, 송신 큐, 수신 worker, 안전 종료
-- 제한 시간 기반 non-blocking TCP connect와 최대 횟수 자동 재접속
-- loopback 강제 종료·재접속 회귀 테스트와 선택 실행형 1,000회 Transport Soak 테스트
-- 프레임 프로토콜: 헤더 직렬화, CRC16, 스트림 파싱 및 손상 프레임 복구
-- Application: 장비 등록, 세션 관리, 상태 전이, 이벤트 큐
-- 교체형 장비 Adapter: 의미 단위 짐벌 명령과 제조사별 frame/ACK/Telemetry 변환 분리
-- MFC 제어 콘솔: 시작 운용 모드 선택(고정카메라/드론), Host/Port 연결, 전원, 초기화,
-  Pan/Tilt 또는 드론 이륙·착륙·좌표 이동·귀환, 장비·통신 장애 주입
-- 실시간 모니터: ACK, telemetry, 장비 상태, 통신 오류 및 알람
-- Telemetry heartbeat 감시: 연결 후 1.5초 Warning, 3초 Fault, 정상 수신 시 자동 복구
-- Telemetry 품질 지표: 수신 수, sequence gap 기반 누락 추정, 전달률, 수신 간격 및 지터 표시
-- 시험 자동화: `.dls` 시나리오 선택·실행·중지·단계별 진행 상태
-- 시험 결과 리포트: 완료·실패·취소 시 단계별 PASS/FAIL/NOT RUN Markdown 보고서 자동 생성
-- Record & Replay: 실제 송신 명령 영속화 및 재전송, replay 증폭 방지
-- 알람 운용: 통신 알람 목록과 사용자 확인 처리
-- 이벤트 이력: SQLite 기록을 장비 ID·종류·검색어로 필터링해 최근 200건 조회
-- 운영 설정: endpoint, 자동 재접속, 시나리오 경로와 이력 필터 자동 저장·복원
-- DPI 대응 UI: Per-Monitor V2, 고해상도 글꼴 재생성, 창 크기에 따른 목록 영역 확장
-- 콘솔 시뮬레이터: echo, 지연, 연결 종료, CRC 손상, telemetry 모드
-- ScenarioRunner: 연결, 프레임 전송, 해제, 지연, 취소
-- Infrastructure: 파일 로거 및 비동기 로거
-- Frame replay: 검증 완료 프레임을 지정한 간격으로 재전송
-- SQLite: event repository, 단일 worker 기반 비동기 저장, 장비 세션 이벤트 영속화
-- Unreal 가상장비: EO/IR 짐벌 상태 머신, 물리 동작, TCP 서버, 현장 blockout 레벨
-- Unreal 통합 Soak: 무인 서버 기동, 실제 명령/ACK/Telemetry 검증, 주기적 TCP 재연결
-- Fault simulation: Motor Stall, Over Temperature, Sensor Failure, 응답 지연, 무응답 및 정상 복구
-- Axis VAPIX 가상 장비 프로파일: PTZ 절대 이동·홈·연속 이동/정지·위치 조회 HTTP 계약 검증
-
-제조사 사양서 기반 실장 Adapter와 설치 패키지는 후속 외부 입력·배포 범위입니다.
-
-## Axis PTZ 가상 장비 프로파일
-
-`AxisVapixCommandAdapter`는 Axis VAPIX PTZ CGI 계약에 맞춰 홈 이동, 절대 Pan/Tilt, 연속 Pan
-이동/정지, 위치 조회 요청을 만듭니다. 이는 실제 Axis 카메라 구매를 전제하지 않고, 이후 Unreal
-가상 짐벌이 해당 HTTP 계약을 흉내 내도록 하기 위한 비교 대상 프로파일입니다. 현재 포트폴리오의
-검증 대상은 항상 **Unreal 가상 장비 ↔ Windows 연결 프로그램**입니다.
-
-## 운용 방법 (한국어)
-
-### 사전 조건
-
-- Windows와 Visual Studio C++ 데스크톱 개발 도구, MFC, CMake가 설치되어 있어야 합니다.
-- Unreal Engine 5.8은 기본 경로 `F:\UE_5.8`에 설치되어 있어야 합니다. 다른 경로를 사용하면
-  `run-unreal-virtual-device.bat`와 `run-integration-demo.bat`의 `UNREAL_EDITOR`를 수정합니다.
-- 기본 통신은 동일 PC의 `127.0.0.1:5000` TCP입니다. 방화벽 경고가 나오면 개인 네트워크에서
-  Unreal 실행 파일의 통신을 허용합니다.
-
-### 빠른 실행
-
-`run-integration-demo.bat`를 더블클릭하면 Unreal 게임 창과 MFC 콘솔을 함께 실행합니다.
-개발용으로 따로 실행하려면 다음 순서를 사용합니다.
-
-1. `run-unreal-virtual-device.bat`를 실행하고 Unreal Editor에서 **Play**를 누릅니다.
-2. 시작 안내에서 Port `5000`으로 **시뮬레이션 시작**을 누릅니다.
-3. `run-mfc-host.bat`를 실행합니다.
-4. MFC 화면의 `127.0.0.1`, `5000`을 확인하고 **연결**을 누릅니다.
-5. 상단 **운용 모드**를 선택한 뒤 **연결**을 누릅니다. 현재 선택한 모드는 연결 직후 Unreal
-   가상장비로 적용됩니다.
-6. 아래 모드별 절차를 수행하고 MFC의 ACK/Telemetry/State와 Unreal의 움직임을 함께 확인합니다.
-
-### 노트북 ↔ 데스크톱 LAN 테스트
-
-두 PC는 같은 신뢰할 수 있는 개인 네트워크에 연결해야 합니다.
-
-1. Unreal을 실행할 데스크톱에서 `setup-lan-firewall.bat`를 한 번 실행합니다. 관리자 권한 확인 후
-   TCP 5000 인바운드를 Windows **개인 네트워크 프로필에만** 허용합니다.
-2. 데스크톱에서 `run-unreal-lan-device.bat`를 실행합니다. 가상장비는 `0.0.0.0:5000`에
-   바인딩되고 콘솔에 데스크톱 IPv4 후보가 표시됩니다.
-3. 노트북에서 `run-mfc-host.bat`를 실행합니다.
-4. MFC의 Host에 데스크톱 IPv4(예: `192.168.0.20`), Port에 `5000`을 입력하고 **연결**을 누릅니다.
-5. `전원 ON` → `초기화` → Pan/Tilt 또는 조이스틱 명령을 실행하고 ACK/Telemetry와 Unreal 움직임을
-   함께 확인합니다.
-6. 테스트가 끝나면 MFC에서 **연결 해제**를 누른 뒤 Unreal을 종료합니다.
-
-Unreal 시작 안내를 직접 사용하는 경우에는 **같은 네트워크의 다른 PC 접속 허용**을 체크하고
-시뮬레이션을 시작해도 같습니다. 체크하지 않으면 기존처럼 `127.0.0.1` 로컬 연결만 허용합니다.
-공용 Wi-Fi에서는 LAN 허용 모드를 사용하지 마십시오. 연결되지 않으면 두 PC에서 `ping <데스크톱 IP>`로
-같은 네트워크인지 확인하고, 데스크톱 네트워크 프로필과 방화벽 규칙이 `Private`인지 확인합니다.
-
-### 고정카메라 관제 모드
-
-1. **고정카메라 관제 모드**를 선택합니다.
-2. **전원 ON** → **초기화**를 누릅니다.
-3. `Pan`, `Tilt`에 각각 Pan `-170~170°`, Tilt `-45~80°` 범위의 값을 입력하고 **각도 적용**을 누릅니다.
-4. 필요하면 **스캔 시작/스캔 정지**로 왕복 감시 동작을 확인합니다.
-루트의 `run-laptop-test.bat` 하나를 양쪽 PC에서 실행한 뒤, 데스크톱은 `1`, 노트북은 `2`를 선택합니다.
-5. **상태 요청**으로 즉시 telemetry를 수신합니다.
-
-### 드론 관제 모드
-
-1. **드론 관제 모드**를 선택하고 **연결**합니다. Unreal의 EO/IR 장비가 큐브 기반 드론 기체에
-   부착된 가상장비로 전환됩니다.
-2. **이륙**을 누릅니다. 드론은 홈 위치의 고도 10 m까지 상승합니다.
-3. `X 좌표 m`, `Y 좌표 m`에 목표 좌표를 입력하고 **좌표 이동**을 누릅니다. 현재 UI의 이동 고도는
-   10 m로 고정되어 있습니다.
-4. **귀환**은 홈 위치 상공(10 m)으로 이동시키고, **착륙**은 현재 위치에서 지상으로 내립니다.
-5. 모드를 바꾸면 Unreal 가상 드론은 홈 위치/지상 상태로 안전하게 초기화됩니다.
-
-### 모니터링·장애·시험 운용
-
-- `수신 패킷`에서 TX/RX 프레임과 ACK 성공 여부를 확인합니다.
-
-한 PC에서 전체 흐름을 확인할 때는 `run-self-test.bat`를 실행합니다. 이 배치는 로컬 전용
-`127.0.0.1:5000`에서 Unreal 가상장비와 MFC 콘솔을 함께 시작합니다.
-- `실시간 장비 상태`에서 상태, 고장, 현재/목표 각도, 온도·전압, telemetry 품질을 확인합니다.
-- `장비 / 통신 장애 시뮬레이션`에서 Motor Stall, Over Temperature, Sensor Failure, 응답 지연,
-  무응답을 주입하고 정상 응답으로 복구할 수 있습니다.
-- 우측의 기본 `.dls` 시나리오를 실행하면 고정카메라 자동 시연을 수행하고 Markdown 시험 보고서를
-  생성합니다. 드론은 현재 수동 관제 절차로 검증합니다.
-- 연결이 끊기면 자동 재접속을 사용하거나 **연결 해제** 후 다시 연결합니다. 연결 해제는 TCP worker와
-  socket을 안전하게 종료합니다.
-
-MFC 오른쪽의 기본 시나리오 `..\scenarios\unreal-gimbal-demo.dls`를 실행하면 전원,
-초기화, 각도 이동, 스캔, 상태 요청을 순차 수행합니다. 이후 **송신 기록 Replay**로 저장된
-TX 명령을 다시 실행할 수 있습니다.
-
-시나리오가 끝나면 시나리오 파일과 같은 폴더에 `파일이름.report.완료시각.md`가 자동 생성됩니다.
-기존 결과를 덮어쓰지 않고 실행마다 별도 보관합니다. 이 파일은
-최종 판정, 실행 시간, 실패 원인, 각 단계의 명령·지연·결과를 남기므로 포트폴리오 및 시험 증적에
-바로 사용할 수 있습니다.
-
-`scenarios\unreal-gimbal-fault-demo.dls`는 과열, 센서 고장, 1초 응답 지연, 무응답과
-정상 복구를 순서대로 시연합니다. 같은 기능은 MFC의 **장비 / 통신 장애 시뮬레이션** 영역에서
-개별 선택할 수 있습니다. 무응답 상태에서도 복구용 응답 설정 명령은 즉시 처리됩니다.
-
-화면 하단의 이벤트 이력에서는 `connection-state`, `frame-sent`, `frame-replayed`,
-`frame-received`, `transport-error`, `telemetry-heartbeat`를 구분해 조회할 수 있습니다.
-
-TCP 연결은 기본 3초 timeout을 사용합니다. MFC의 **자동 재접속**이 켜져 있으면 최초 연결 실패나
-원격 종료 후 1.5초 간격으로 최초 시도를 포함해 최대 5회 연결하며, 사용자가 연결 해제를 누르면
-재접속 의도를 취소하고 worker를 안전하게 종료합니다.
-
-MFC를 정상 종료하면 현재 Host/Port, 자동 재접속 여부, 시나리오 경로와 이력 검색 조건을
-`DeviceLinkStudio.settings`에 원자적으로 저장하고 다음 실행에 복원합니다. 설정 파일이 없거나
-손상된 경우에는 안전한 기본값을 사용합니다.
-
-MFC 창은 최소 운용 크기 아래로 줄어들지 않으며 최대화할 수 있습니다. 창 높이가 늘어나면
-패킷·오류·이력 목록이 자동으로 확장되고, 배율이 다른 모니터로 이동하면 글꼴과 컨트롤을
-해당 모니터 DPI에 맞춰 다시 배치합니다.
-
-오른쪽 하단의 **Heartbeat 적용**에서 Warning/Fault 시간을 ms 단위로 바꿀 수 있습니다. Warning은
-100~600,000 ms, Fault는 Warning보다 큰 값만 허용하며 적용값은 다음 실행에도 복원됩니다.
-
-실시간 장비 상태 영역의 `Quality` 행은 telemetry sequence를 기준으로 수신 수와 누락 추정치를,
-도착 시간을 기준으로 최근/평균 수신 간격 및 지터(연속 간격 변화의 평균)를 표시합니다. 전달률은
-`수신 / (수신 + 누락 추정)`이며, 순서가 뒤바뀐 frame은 누락으로 계산하지 않고 별도 표시합니다.
-
-자동 검증과 장애·재연결 테스트 절차는 `docs/TESTING_KR.md`에 정리되어 있습니다.
-
-장시간 Transport 안정성 검증은 `run-transport-soak.bat`를 실행합니다. 기본값은 1,000회이며
-예를 들어 `run-transport-soak.bat 5000`으로 반복 횟수를 지정할 수 있습니다.
-
-Unreal까지 포함한 전체 통합 검증은 `run-unreal-integration-soak.bat`를 실행합니다. 스크립트가
-Unreal 가상장비를 자동 시작하고 전원, 각도, 상태 요청, ACK, Telemetry와 25사이클마다의 재연결을
-검증한 다음 자신이 시작한 Unreal 프로세스를 종료합니다. 기본 250사이클이며 첫 번째 인자로
-사이클 수, 두 번째 인자로 포트를 지정할 수 있습니다.
-
-## LLM Agent · MCP 운용
-
-자연어로 Unreal 가상 EO/IR을 운용하고 Fault 복구 시험을 실행할 수 있습니다.
-
-```text
-Codex Agent → MCP Server → C++ Agent Bridge → Application → Protocol → TCP → Unreal EO/IR
+```mermaid
+flowchart LR
+    UI["MFC 관제 UI"] --> APP["Application<br/>세션·상태·시나리오"]
+    MCP["Codex / MCP<br/>선택적 자연어 운용"] --> APP
+    APP --> CORE["Core"]
+    CORE --> PROTO["Protocol<br/>프레임·CRC16"]
+    CORE --> TRANS["Transport<br/>Winsock2 TCP"]
+    TRANS <-->|"명령 / ACK / Telemetry"| UE["Unreal 가상 EO/IR<br/>Pan·Tilt·Scan·고장"]
+    APP --> INFRA["Infrastructure<br/>SQLite·파일 로그"]
+    APP --> REPORT[".dls 실행<br/>Markdown 시험 보고서"]
 ```
 
-### 빠른 실행 순서
+**연결 → 전원·초기화·각도/스캔 제어 → 장애 주입 → 알람·이력 확인 → 재접속·복구 → 보고서 생성**
 
-1. 최초 1회 `DeviceLinkAgentBridge`를 빌드하고 Codex에 `devicelink` STDIO MCP 서버를 등록합니다.
-2. `run-unreal-virtual-device.bat`를 실행해 `127.0.0.1:5000` 가상장비를 시작합니다.
-3. Codex에서 `/mcp`로 `devicelink` 연결을 확인합니다.
-4. 다음과 같이 자연어로 운용합니다.
+## 핵심 기능
 
-```text
-127.0.0.1:5000의 EO/IR에 연결하고 Pan 30도, Tilt -10도로 이동한 다음 Telemetry를 확인해줘.
-```
+- **안정적인 통신:** TCP 송수신 worker, 송신 큐, 연결 timeout, 자동 재접속과 안전 종료. Transport는 raw byte만 다루고 Protocol이 프레임·CRC16·스트림 파싱을 담당합니다.
+- **장비 관제:** 전원·초기화·Pan/Tilt·Scan 명령, ACK/Telemetry와 상태·온도·전압·통신 품질 표시. worker 이벤트는 큐와 `PostMessage`를 거쳐 UI 스레드에서 처리합니다.
+- **장애와 복구:** Motor Stall·과열·센서 고장·응답 지연·무응답 주입, heartbeat Warning/Fault, SQLite 알람 이력 및 정상화 확인.
+- **반복 검증:** `.dls` 시나리오, Record & Replay, 단계별 PASS/FAIL Markdown 보고서, Transport 및 Unreal 통합 Soak 테스트.
 
-```text
-Motor Stall이 무엇인지 매뉴얼에서 찾아 설명하고, 실제로 주입한 뒤 정상 복구되는지 시험해줘.
-```
+## 프로젝트 구조
 
-MCP 서버와 C++ 브리지는 Codex가 자동으로 실행합니다. 사용자는 Unreal 가상장비만 먼저 실행하면 됩니다.
-빌드, Codex 등록, 각 프로세스의 역할, 장비 운용, Fault·RAG·시험 절차와 문제 해결은
-[`docs/DEVICE_AGENT_MCP_KR.md`](docs/DEVICE_AGENT_MCP_KR.md)를 참고하세요.
-
-## Operating Guide (English)
-
-### Prerequisites
-
-- Install Windows desktop C++ development tools, MFC, and CMake with Visual Studio.
-- Unreal Engine 5.8 is expected at `F:\UE_5.8`. If it is installed elsewhere, update the
-  `UNREAL_EDITOR` value in `run-unreal-virtual-device.bat` and `run-integration-demo.bat`.
-- The default local integration endpoint is `127.0.0.1:5000` over TCP. Allow the Unreal
-  executable through the private-network firewall prompt if Windows displays one.
-
-### Start the integrated demo
-
-1. Double-click `run-unreal-virtual-device.bat`, open the Unreal Editor, and press **Play**.
-2. In the startup guide, retain port `5000` and press **Start Simulation**.
-3. Double-click `run-mfc-host.bat` to build and open DeviceLink Studio.
-4. Confirm host `127.0.0.1` and port `5000`.
-5. Select an operating mode, then press **Connect**. The selected mode is sent to the
-   Unreal virtual device immediately after the TCP connection is established.
-
-### Fixed-camera monitoring mode
-
-1. Select **Fixed Camera Monitoring Mode**.
-2. Send **Power On**, then **Initialize**.
-3. Enter a Pan target from `-170` to `170°` and a Tilt target from `-45` to `80°`, then send
-   **Apply Angle**.
-4. Use **Start/Stop Scan** for the sweep demonstration and **Request Status** for immediate telemetry.
-
-### Drone monitoring mode
-
-1. Select **Drone Monitoring Mode** and connect. Unreal changes the EO/IR device to a
-   cube-based virtual drone payload.
-2. Send **Take Off**. The drone climbs to 10 m above its home location.
-3. Enter target `X` and `Y` coordinates in metres, then send **Move To**. The current control
-   UI intentionally uses a fixed flight altitude of 10 m.
-4. **Return Home** flies to the home location at 10 m; **Land** descends at the current location.
-5. Switching modes resets the virtual drone safely to its home ground state.
-
-### Monitoring, faults, and test evidence
-
-- Inspect transmitted/received frames and acknowledgement results in **Received Packets**.
-- Inspect device state, fault, current/target orientation, temperature, voltage, and telemetry
-  quality in **Real-time Device Status**.
-- The fault panel simulates Motor Stall, Over Temperature, Sensor Failure, delayed responses,
-  and no response. Return to normal response to recover.
-- The default `.dls` scenario automates the fixed-camera workflow and writes a Markdown test
-  report. The drone workflow is currently verified through the manual operating procedure.
-- Automatic reconnect can recover a dropped endpoint. **Disconnect** intentionally shuts down
-  the TCP worker and socket safely.
-
-## 빌드와 자동 테스트
-
-Visual Studio C++ 도구와 CMake가 설치된 PowerShell에서 실행합니다.
-
-~~~powershell
-cmd.exe /d /c 'call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -S . -B build && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build build && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe" --test-dir build --output-on-failure'
-~~~
-
-테스트만 다시 실행할 때:
-
-~~~powershell
-ctest --test-dir build --output-on-failure
-~~~
-
-## 시뮬레이터
-
-~~~powershell
-.\build\DeviceLinkSimulator.exe 5000 echo
-~~~
-
-두 번째 인자로 다음 모드를 선택할 수 있습니다.
-
-| 모드 | 동작 |
+| 경로 | 역할 |
 | --- | --- |
-| echo | 수신한 유효 프레임을 그대로 반환 |
-| delay | 응답을 지연 |
-| disconnect | 프레임 수신 뒤 연결 종료 |
-| corrupt-crc | CRC가 손상된 응답 프레임을 전송 |
-| corrupt-then-echo | CRC가 손상된 프레임 뒤 정상 응답 전송 |
-| fragmented | 정상 응답을 두 TCP 조각으로 나눠 전송 |
-| telemetry | 연결 뒤 telemetry 프레임을 전송 |
+| `src/`, `include/DeviceLink/` | UI → Application → Core; 독립된 Protocol·Transport와 Infrastructure 구현 |
+| `UnrealVirtualDevice/` | EO/IR 가상 장비, TCP 서버, 짐벌 상태 머신과 현장 레벨 |
+| `mcp_server/`, `src/AgentBridge/` | 선택적 자연어 장비 운용; 기존 Application API 경유 |
+| `scenarios/`, `tests/`, `docs/` | 자동 시험 시나리오·회귀 테스트·설계/운용 문서 |
 
-## 계층 구조
+## 실행과 검증
 
-~~~
-UI
-  ↓
-Application
-  ↓
-Core
-  ↓
-Protocol
-  ↓
-Transport
-  ↓
-Infrastructure
-~~~
+Windows에서 Visual Studio C++/MFC와 Unreal Engine 5.8을 준비한 뒤 `run-integration-demo.bat`를 실행합니다. 기본 연결은 `127.0.0.1:5000`입니다. C++ 테스트는 빌드 후 `ctest --test-dir build --output-on-failure`로 실행합니다.
 
-자세한 책임과 worker-to-UI 이벤트 흐름은 docs/ARCHITECTURE.md를 참고하세요.
+주력 검증 대상은 **DeviceLink TCP로 연결된 고정형 EO/IR**입니다. 드론 운용은 같은 구조의 확장 사례이며, Axis VAPIX는 HTTP 요청·응답 매핑의 단위 검증 범위입니다.
+
+[아키텍처](docs/ARCHITECTURE.md) · [시험 절차](docs/TESTING_KR.md) · [MCP 운용](docs/DEVICE_AGENT_MCP_KR.md) · [Unreal 가상 장비](docs/UNREAL_VIRTUAL_DEVICE.md)
