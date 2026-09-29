@@ -115,6 +115,18 @@ int main(int argc, char* argv[])
             else
                 result = agent.ConnectDevice(host, static_cast<std::uint16_t>(port));
         }
+        else if (command == "POWER_ON")
+        {
+            result = agent.SetPower(true, ReadTimeout(input, 3000));
+        }
+        else if (command == "POWER_OFF")
+        {
+            result = agent.SetPower(false, ReadTimeout(input, 3000));
+        }
+        else if (command == "INITIALIZE")
+        {
+            result = agent.Initialize(ReadTimeout(input, 5000));
+        }
         else if (command == "SET_ANGLE")
         {
             double pan{};

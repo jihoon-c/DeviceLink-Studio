@@ -46,6 +46,7 @@ struct VirtualGimbalTelemetry final
 
 struct VirtualGimbalAcknowledgement final
 {
+    std::uint32_t sequence{};
     std::uint16_t commandType{};
     bool succeeded{};
 };
@@ -65,6 +66,7 @@ enum class GimbalCommandKind : std::uint8_t
     DroneLand,
     DroneMoveTo,
     DroneReturnHome,
+    SetCameraView,
 };
 
 enum class VirtualEquipmentMode : std::uint8_t { FixedCamera, Drone };
@@ -82,6 +84,7 @@ struct GimbalCommand final
     double droneXmeters{};
     double droneYmeters{};
     double droneAltitudeMeters{};
+    bool cameraViewEnabled{};
 };
 
 class IGimbalProtocolAdapter

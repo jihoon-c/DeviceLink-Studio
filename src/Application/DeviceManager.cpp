@@ -2,9 +2,49 @@
 
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace DeviceLink::Application
 {
+
+DeviceEventSubscription::DeviceEventSubscription(
+    DeviceManager& manager, const std::uint64_t observerId) noexcept
+    : m_manager(&manager), m_observerId(observerId)
+{
+}
+
+DeviceEventSubscription::~DeviceEventSubscription()
+{
+    Reset();
+}
+
+DeviceEventSubscription::DeviceEventSubscription(DeviceEventSubscription&& other) noexcept
+    : m_manager(std::exchange(other.m_manager, nullptr)),
+      m_observerId(std::exchange(other.m_observerId, 0))
+{
+}
+
+DeviceEventSubscription& DeviceEventSubscription::operator=(
+    DeviceEventSubscription&& other) noexcept
+{
+    if (this != &other)
+    {
+        Reset();
+        m_manager = std::exchange(other.m_manager, nullptr);
+        m_observerId = std::exchange(other.m_observerId, 0);
+    }
+    return *this;
+}
+
+void DeviceEventSubscription::Reset() noexcept
+{
+    if (m_manager != nullptr)
+    {
+        m_manager->RemoveEventObserver(m_observerId);
+        m_manager = nullptr;
+        m_observerId = 0;
+    }
+}
 
 bool DeviceManager::RegisterDevice(std::string deviceId)
 {
@@ -141,19 +181,49 @@ std::size_t DeviceManager::DeviceCount() const noexcept
 void DeviceManager::SetEventObserver(EventObserver eventObserver)
 {
     std::unique_lock lock(m_mutex);
-    m_eventObserver = std::move(eventObserver);
+    if (eventObserver)
+    {
+        m_eventObservers[0] = std::move(eventObserver);
+    }
+    else
+    {
+        m_eventObservers.erase(0);
+    }
+}
+
+DeviceEventSubscription DeviceManager::SubscribeToEvents(EventObserver eventObserver)
+{
+    if (!eventObserver)
+    {
+        return {};
+    }
+    std::unique_lock lock(m_mutex);
+    const auto observerId = m_nextObserverId++;
+    m_eventObservers.emplace(observerId, std::move(eventObserver));
+    return DeviceEventSubscription(*this, observerId);
+}
+
+void DeviceManager::RemoveEventObserver(const std::uint64_t observerId) noexcept
+{
+    std::unique_lock lock(m_mutex);
+    m_eventObservers.erase(observerId);
 }
 
 void DeviceManager::PublishEvent(DeviceEvent event)
 {
-    EventObserver eventObserver;
+    std::vector<EventObserver> eventObservers;
     {
         std::shared_lock lock(m_mutex);
-        eventObserver = m_eventObserver;
+        eventObservers.reserve(m_eventObservers.size());
+        for (const auto& [observerId, observer] : m_eventObservers)
+        {
+            static_cast<void>(observerId);
+            eventObservers.push_back(observer);
+        }
     }
 
     m_events.Push(event);
-    if (eventObserver)
+    for (const auto& eventObserver : eventObservers)
     {
         eventObserver(event);
     }

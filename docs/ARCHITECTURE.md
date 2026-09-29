@@ -2,16 +2,31 @@
 
 ## 의존성 규칙
 
-각 계층은 아래 방향으로만 의존합니다. 하위 계층은 상위 계층의 타입이나 UI를 알지 못합니다.
+상위 정책은 하위 구현을 조합하지만, Protocol과 Transport는 서로의 책임을 알지 못합니다.
+Infrastructure는 Transport의 하위 계층이 아니라 Application이 interface를 통해 사용하는 외부 저장·로그
+경계입니다. 실제 CMake target 관계는 아래와 같습니다.
 
 ~~~
-UI → Application → Core → Protocol → Transport → Infrastructure
+UI → Application → Core
+       │           ├─→ Protocol
+       │           └─→ Transport
+       └─────────────→ Infrastructure interfaces
+
+Infrastructure implementations
+  ├─→ SQLite
+  └─→ File logging
 ~~~
+
+- UI는 Application의 의미 단위 API와 읽기 모델만 사용합니다.
+- Core의 `DeviceSession`은 Protocol framing과 raw-byte Transport를 조합합니다.
+- Protocol은 socket을 모르고 Transport는 packet 의미를 모릅니다.
+- Application은 저장·파일 interface에 의존하며 실제 SQLite와 파일 구현은 Infrastructure가 제공합니다.
 
 ## 포트폴리오 시스템 경계
 
-이 프로젝트의 제품 경계는 아래와 같다. 실제 장비는 요구하지 않으며, Unreal 가상 장비를 통해
-실장 통합에서 필요한 통신·동시성·장애·시험 자동화 문제를 재현한다.
+이 프로젝트는 실제 장비나 물리 모델을 완전히 대체하는 SILS가 아니라, Unreal 가상 장비를 통해
+실장 통합에서 필요한 통신·동시성·장애·시험 자동화 문제를 재현하는 SILS-like 테스트베드다.
+주력 검증 대상은 고정형 EO/IR 장비이며 드론 조종은 동일 구조의 확장 사례다.
 
 ~~~
 Windows MFC 연결 프로그램

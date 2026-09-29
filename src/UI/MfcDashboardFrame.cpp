@@ -2,9 +2,10 @@
 
 #include <afxdlgs.h>
 
-#include <cerrno>
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cwchar>
 #include <exception>
 #include <filesystem>
@@ -141,6 +142,24 @@ CString FromUtf8(const std::string& value)
         static_cast<int>(value.size()), converted.data(), size);
     return CString(converted.data(), size);
 }
+
+void SetControlTextIfChanged(CWnd& control, const CString& text)
+{
+    CString current;
+    control.GetWindowText(current);
+    if (current != text)
+    {
+        control.SetWindowText(text);
+    }
+}
+
+void SetControlEnabledIfChanged(CWnd& control, bool enabled)
+{
+    if ((control.IsWindowEnabled() != FALSE) != enabled)
+    {
+        control.EnableWindow(enabled);
+    }
+}
 } // namespace
 
 BEGIN_MESSAGE_MAP(MfcDashboardFrame, CFrameWnd)
@@ -149,6 +168,7 @@ BEGIN_MESSAGE_MAP(MfcDashboardFrame, CFrameWnd)
     ON_WM_PAINT()
     ON_WM_SIZE()
     ON_WM_GETMINMAXINFO()
+    ON_WM_TIMER()
     ON_MESSAGE(WM_DPICHANGED, &MfcDashboardFrame::OnDpiChanged)
     ON_BN_CLICKED(MfcDashboardFrame::ConnectButtonId, &MfcDashboardFrame::OnConnect)
     ON_BN_CLICKED(MfcDashboardFrame::DisconnectButtonId, &MfcDashboardFrame::OnDisconnect)
@@ -175,6 +195,14 @@ BEGIN_MESSAGE_MAP(MfcDashboardFrame, CFrameWnd)
         &MfcDashboardFrame::OnToggleAutomaticReconnect)
     ON_CBN_SELCHANGE(MfcDashboardFrame::EquipmentModeComboId,
         &MfcDashboardFrame::OnEquipmentModeChanged)
+    ON_BN_CLICKED(MfcDashboardFrame::VelocityModeButtonId,
+        &MfcDashboardFrame::OnVelocityMode)
+    ON_BN_CLICKED(MfcDashboardFrame::PositionModeButtonId,
+        &MfcDashboardFrame::OnPositionMode)
+    ON_BN_CLICKED(MfcDashboardFrame::CenterGimbalButtonId,
+        &MfcDashboardFrame::OnCenterGimbal)
+    ON_BN_CLICKED(MfcDashboardFrame::CameraViewCheckId,
+        &MfcDashboardFrame::OnToggleCameraView)
     ON_MESSAGE(WM_APP + 101, &MfcDashboardFrame::OnDeviceEvent)
     ON_MESSAGE(WM_APP + 102, &MfcDashboardFrame::OnWorkflowProgress)
 END_MESSAGE_MAP()
@@ -225,9 +253,10 @@ int MfcDashboardFrame::OnCreate(LPCREATESTRUCT createStructure)
     GetClientRect(&client);
     LayoutControls(client.Width(), client.Height());
     LoadSettings();
+    SetTimer(kJoystickTimerId, 50, nullptr);
     m_dashboardBinding = std::make_unique<DashboardBinding>(
         m_runtime.Devices().Events(), m_dashboardModel, GetSafeHwnd(), kDeviceEventMessage,
-        [this] { Invalidate(FALSE); });
+        [] {});
     if (!m_dashboardBinding->Attach())
     {
         return -1;
@@ -296,6 +325,8 @@ bool MfcDashboardFrame::CreateControls()
             CRect(760, 420, 830, 447), this, 2110) ||
         !m_applyHeartbeatSettingsButton.Create(L"Heartbeat 적용", buttonStyle,
             CRect(840, 418, 1035, 450), this, ApplyHeartbeatSettingsButtonId) ||
+        !m_cameraViewCheck.Create(L"카메라 뷰 보기", WS_CHILD | WS_VISIBLE |
+                BS_AUTOCHECKBOX, CRect(680, 275, 830, 300), this, CameraViewCheckId) ||
         !m_scenarioPathEdit.Create(editStyle, CRect(680, 105, 940, 132), this, 2105) ||
         !m_browseScenarioButton.Create(L"찾기", buttonStyle, CRect(950, 103, 1035, 134), this,
             BrowseScenarioButtonId) ||
@@ -330,6 +361,25 @@ bool MfcDashboardFrame::CreateControls()
     {
         return false;
     }
+    if (!m_velocityModeButton.Create(L"속도 모드",
+            WS_CHILD | WS_VISIBLE | WS_GROUP | BS_AUTORADIOBUTTON,
+            CRect(395, 250, 475, 274), this, VelocityModeButtonId) ||
+        !m_positionModeButton.Create(L"위치 모드",
+            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+            CRect(480, 250, 560, 274), this, PositionModeButtonId) ||
+        !m_centerGimbalButton.Create(L"중앙 정렬", buttonStyle,
+            CRect(395, 280, 475, 312), this, CenterGimbalButtonId) ||
+        !m_joystickSpeedStatus.Create(L"20 Hz / 20 deg/s",
+            WS_CHILD | WS_VISIBLE, CRect(480, 285, 565, 307), this) ||
+        !m_joystick.Create(this, 2401, CRect(570, 245, 650, 325),
+            [this](double panAxis, double tiltAxis, JoystickEvent event) {
+                OnJoystickAxes(panAxis, tiltAxis, event);
+            }))
+    {
+        return false;
+    }
+    m_velocityModeButton.SetCheck(BST_CHECKED);
+    m_joystick.SetMode(JoystickMode::Velocity);
     m_hostEdit.SetWindowText(L"127.0.0.1");
     m_portEdit.SetWindowText(L"5000");
     m_panEdit.SetWindowText(L"45.0");
@@ -404,6 +454,11 @@ void MfcDashboardFrame::UpdateFonts()
              &m_packetList, &m_errorList,
              &m_historyList, &m_applyResponseModeButton};
     controls.push_back(&m_applyHeartbeatSettingsButton);
+    controls.push_back(&m_velocityModeButton);
+    controls.push_back(&m_positionModeButton);
+    controls.push_back(&m_centerGimbalButton);
+    controls.push_back(&m_cameraViewCheck);
+    controls.push_back(&m_joystickSpeedStatus);
     for (CWnd* control : controls)
     {
         control->SetFont(&m_bodyFont);
@@ -438,16 +493,21 @@ void MfcDashboardFrame::LayoutControls(int clientWidth, int clientHeight)
     move(m_connectionStatus, 540, y(105), 655, y(130));
     move(m_automaticReconnectCheck, 310, y(140), 430, y(162));
     move(m_reconnectStatus, 440, y(142), 650, y(162));
-    move(m_equipmentModeCombo, 35, y(170), 255, y(285));
-    move(m_powerOnButton, 35, y(205), 135, y(238));
-    move(m_powerOffButton, 145, y(205), 245, y(238));
-    move(m_initializeButton, 255, y(205), 355, y(238));
-    move(m_panEdit, 385, y(207), 460, y(234));
-    move(m_tiltEdit, 470, y(207), 545, y(234));
-    move(m_setTargetButton, 555, y(205), 655, y(238));
-    move(m_startScanButton, 35, y(250), 145, y(283));
-    move(m_stopScanButton, 155, y(250), 265, y(283));
-    move(m_requestStatusButton, 275, y(250), 385, y(283));
+    move(m_equipmentModeCombo, 35, y(195), 255, y(310));
+    move(m_powerOnButton, 35, y(225), 135, y(258));
+    move(m_powerOffButton, 145, y(225), 245, y(258));
+    move(m_initializeButton, 255, y(225), 355, y(258));
+    move(m_panEdit, 385, y(225), 460, y(252));
+    move(m_tiltEdit, 470, y(225), 545, y(252));
+    move(m_setTargetButton, 555, y(223), 655, y(256));
+    move(m_velocityModeButton, 395, y(270), 475, y(294));
+    move(m_positionModeButton, 480, y(270), 560, y(294));
+    move(m_centerGimbalButton, 395, y(300), 475, y(332));
+    move(m_joystickSpeedStatus, 395, y(337), 565, y(360));
+    move(m_joystick, 570, y(265), 650, y(345));
+    move(m_startScanButton, 35, y(270), 145, y(303));
+    move(m_stopScanButton, 155, y(270), 265, y(303));
+    move(m_requestStatusButton, 275, y(270), 385, y(303));
     move(m_faultCombo, 680, y(310), 815, y(430));
     move(m_injectFaultButton, 825, y(308), 925, y(341));
     move(m_clearFaultButton, 935, y(308), 1035, y(341));
@@ -461,8 +521,9 @@ void MfcDashboardFrame::LayoutControls(int clientWidth, int clientHeight)
     move(m_workflowStatus, 680, y(183), 1035, y(210));
     move(m_startReplayButton, 680, y(235), 830, y(268));
     move(m_acknowledgeAlarmButton, 840, y(235), 985, y(268));
-    move(m_operationStatus, 35, y(295), 650, y(320));
-    move(m_telemetryStatus, 35, y(355), 650, y(445));
+    move(m_cameraViewCheck, 680, y(275), 830, y(300));
+    move(m_operationStatus, 35, y(310), 385, y(350));
+    move(m_telemetryStatus, 35, y(390), 650, y(445));
     move(m_heartbeatStatus, 680, y(390), 1035, y(415));
     move(m_heartbeatWarningEdit, 680, y(420), 750, y(447));
     move(m_heartbeatFaultEdit, 760, y(420), 830, y(447));
@@ -513,9 +574,14 @@ LRESULT MfcDashboardFrame::OnDpiChanged(WPARAM wParam, LPARAM lParam)
 
 void MfcDashboardFrame::OnDestroy()
 {
+    KillTimer(kJoystickTimerId);
     SaveSettings();
     m_workflowService.Progress().SetWakeupHandler({});
     m_workflowService.Stop();
+    if (m_cameraViewCheck.GetCheck() == BST_CHECKED)
+    {
+        static_cast<void>(m_gimbalService.SetCameraView(false));
+    }
     static_cast<void>(m_gimbalService.Disconnect());
     if (m_dashboardBinding)
     {
@@ -542,8 +608,8 @@ void MfcDashboardFrame::OnPaint()
     dc.TextOut(x(35), y(24), L"DeviceLink Studio");
     dc.SelectObject(&m_sectionFont);
     dc.TextOut(x(35), y(76), L"TCP 연결");
-    dc.TextOut(x(35), y(166), L"운용 모드 / 가상장비 제어");
-    dc.TextOut(x(35), y(335), L"실시간 장비 상태");
+    dc.TextOut(x(35), y(170), L"운용 모드 / 가상장비 제어");
+    dc.TextOut(x(35), y(365), L"실시간 장비 상태");
     dc.TextOut(x(35), y(465), L"수신 패킷");
     dc.TextOut(x(680), y(465), L"통신 오류 / 알람");
     dc.TextOut(x(680), y(76), L"시나리오 자동화");
@@ -555,8 +621,8 @@ void MfcDashboardFrame::OnPaint()
     dc.TextOut(x(35), y(137), L"Host");
     dc.TextOut(x(215), y(137), L"Port");
     const bool droneMode = m_equipmentModeCombo.GetCurSel() == 1;
-    dc.TextOut(x(385), y(184), droneMode ? L"X 좌표 m" : L"Pan (−170~170)");
-    dc.TextOut(x(500), y(184), droneMode ? L"Y 좌표 m" : L"Tilt (−45~80)");
+    dc.TextOut(x(385), y(202), droneMode ? L"X 좌표 m" : L"Pan (−170~170)");
+    dc.TextOut(x(500), y(202), droneMode ? L"Y 좌표 m" : L"Tilt (−45~80)");
     dc.TextOut(x(895), y(353), L"ms");
     dc.TextOut(x(680), y(405), L"Warning ms");
     dc.TextOut(x(760), y(405), L"Fault ms");
@@ -599,7 +665,18 @@ void MfcDashboardFrame::OnConnect()
 
 void MfcDashboardFrame::OnDisconnect()
 {
+    if (m_cameraViewCheck.GetCheck() == BST_CHECKED)
+    {
+        static_cast<void>(m_gimbalService.SetCameraView(false));
+        m_cameraViewCheck.SetCheck(BST_UNCHECKED);
+    }
     const bool disconnected = m_gimbalService.Disconnect();
+    if (disconnected)
+    {
+        m_powerEnabled = false;
+        m_joystick.Reset();
+        UpdateEquipmentModeControls();
+    }
     SetOperationStatus(disconnected ? L"연결을 안전하게 해제했습니다."
                                     : L"해제할 연결이 없습니다.", disconnected);
     RefreshDashboardViews();
@@ -608,12 +685,20 @@ void MfcDashboardFrame::OnDisconnect()
 void MfcDashboardFrame::OnPowerOn()
 {
     const bool sent = m_gimbalService.Power(true);
-    SetOperationStatus(L"전원 ON 명령을 전송했습니다.", sent);
+    SetOperationStatus(sent
+            ? L"전원 ON 명령을 전송했습니다. Telemetry 확인을 기다립니다."
+            : L"전원 ON 명령 전송에 실패했습니다.", sent);
 }
 
 void MfcDashboardFrame::OnPowerOff()
 {
     const bool sent = m_gimbalService.Power(false);
+    if (sent)
+    {
+        m_powerEnabled = false;
+        m_joystick.Reset();
+        UpdateEquipmentModeControls();
+    }
     SetOperationStatus(L"전원 OFF 명령을 전송했습니다.", sent);
 }
 
@@ -639,6 +724,76 @@ void MfcDashboardFrame::OnSetTarget()
                                          : L"목표 각도 명령을 전송했습니다.")
         : (droneMode ? L"드론 좌표는 X/Y 숫자 범위에서 입력하세요."
                      : L"각도 범위: Pan −170~170, Tilt −45~80"), sent);
+}
+
+void MfcDashboardFrame::OnVelocityMode()
+{
+    m_velocityMode = true;
+    m_positionTargetDirty = false;
+    m_joystickPanAxis = 0.0;
+    m_joystickTiltAxis = 0.0;
+    m_lastJoystickTick = std::chrono::steady_clock::now();
+    m_joystick.SetMode(JoystickMode::Velocity);
+    UpdateJoystickModeControls();
+}
+
+void MfcDashboardFrame::OnPositionMode()
+{
+    m_velocityMode = false;
+    m_positionTargetDirty = false;
+    m_joystick.SetMode(JoystickMode::Position);
+    UpdateJoystickModeControls();
+}
+
+void MfcDashboardFrame::OnCenterGimbal()
+{
+    m_panEdit.SetWindowText(L"0.0");
+    m_tiltEdit.SetWindowText(L"0.0");
+    m_positionTargetDirty = false;
+    const bool sent = m_gimbalService.SetPanTilt(0.0, 0.0);
+    SetOperationStatus(L"짐벌 중앙 위치를 전송했습니다.", sent);
+}
+
+void MfcDashboardFrame::OnJoystickAxes(
+    double panAxis, double tiltAxis, JoystickEvent event)
+{
+    m_joystickPanAxis = panAxis;
+    m_joystickTiltAxis = tiltAxis;
+
+    if (!m_velocityMode)
+    {
+        const double pan = (std::clamp)(panAxis * 170.0,
+            Application::VirtualGimbalService::kMinimumPanDegrees,
+            Application::VirtualGimbalService::kMaximumPanDegrees);
+        const double tilt = tiltAxis >= 0.0 ? tiltAxis * 80.0 : tiltAxis * 45.0;
+        CString panText;
+        CString tiltText;
+        panText.Format(L"%.1f", pan);
+        tiltText.Format(L"%.1f", tilt);
+        m_panEdit.SetWindowText(panText);
+        m_tiltEdit.SetWindowText(tiltText);
+        m_positionTargetDirty = true;
+    }
+
+    if (event == JoystickEvent::Released)
+    {
+        const auto pan = ReadAngle(m_panEdit);
+        const auto tilt = ReadAngle(m_tiltEdit);
+        if (pan && tilt)
+        {
+            const bool sent = m_gimbalService.SetPanTilt(*pan, *tilt);
+            SetOperationStatus(L"조이스틱의 마지막 목표 위치를 확정했습니다.", sent);
+        }
+        m_positionTargetDirty = false;
+    }
+}
+
+void MfcDashboardFrame::UpdateJoystickModeControls()
+{
+    m_velocityModeButton.SetCheck(m_velocityMode ? BST_CHECKED : BST_UNCHECKED);
+    m_positionModeButton.SetCheck(m_velocityMode ? BST_UNCHECKED : BST_CHECKED);
+    m_joystickSpeedStatus.SetWindowText(
+        m_velocityMode ? L"20 Hz / 20 deg/s" : L"20 Hz / 절대 위치");
 }
 
 void MfcDashboardFrame::OnStartScan()
@@ -674,6 +829,21 @@ void MfcDashboardFrame::OnEquipmentModeChanged()
                             : L"연결 후 운용 모드를 적용하세요.", sent);
 }
 
+void MfcDashboardFrame::OnToggleCameraView()
+{
+    const bool enabled = m_cameraViewCheck.GetCheck() == BST_CHECKED;
+    const bool sent = m_gimbalService.SetCameraView(enabled);
+    if (!sent)
+    {
+        m_cameraViewCheck.SetCheck(enabled ? BST_UNCHECKED : BST_CHECKED);
+    }
+    SetOperationStatus(sent
+            ? (enabled ? L"Unreal 시점을 장비 카메라로 전환했습니다."
+                       : L"Unreal 시점을 현장 카메라로 복귀했습니다.")
+            : L"연결 후 카메라 뷰를 전환하세요.",
+        sent);
+}
+
 void MfcDashboardFrame::UpdateEquipmentModeControls()
 {
     const bool droneMode = m_equipmentModeCombo.GetCurSel() == 1;
@@ -684,6 +854,14 @@ void MfcDashboardFrame::UpdateEquipmentModeControls()
     m_requestStatusButton.SetWindowText(droneMode ? L"귀환" : L"상태 요청");
     m_panEdit.SetWindowText(droneMode ? L"0" : L"45.0");
     m_tiltEdit.SetWindowText(droneMode ? L"0" : L"10.0");
+    const bool connected = m_gimbalService.ConnectionState().value_or(
+        Core::ConnectionState::Disconnected) == Core::ConnectionState::Connected;
+    const BOOL joystickEnabled = !droneMode && connected && m_powerEnabled;
+    m_joystick.EnableWindow(joystickEnabled);
+    m_velocityModeButton.EnableWindow(!droneMode);
+    m_positionModeButton.EnableWindow(!droneMode);
+    m_centerGimbalButton.EnableWindow(joystickEnabled);
+    UpdateJoystickModeControls();
 }
 
 void MfcDashboardFrame::OnInjectFault()
@@ -853,6 +1031,69 @@ void MfcDashboardFrame::OnToggleAutomaticReconnect()
     RefreshDashboardViews();
 }
 
+void MfcDashboardFrame::OnTimer(UINT_PTR timerId)
+{
+    const auto now = std::chrono::steady_clock::now();
+    double joystickTickSeconds = 0.05;
+    if (m_lastJoystickTick != std::chrono::steady_clock::time_point{})
+    {
+        joystickTickSeconds = (std::clamp)(
+            std::chrono::duration<double>(now - m_lastJoystickTick).count(), 0.0, 0.25);
+    }
+    m_lastJoystickTick = now;
+
+    if (timerId == kJoystickTimerId && m_powerEnabled &&
+        m_equipmentModeCombo.GetCurSel() != 1)
+    {
+        if (m_velocityMode &&
+            (std::abs(m_joystickPanAxis) > 0.08 ||
+             std::abs(m_joystickTiltAxis) > 0.08))
+        {
+            constexpr double speedDegreesPerSecond = 20.0;
+            const double pan = ReadAngle(m_panEdit).value_or(0.0);
+            const double tilt = ReadAngle(m_tiltEdit).value_or(0.0);
+            const double targetPan = (std::clamp)(
+                pan + m_joystickPanAxis * speedDegreesPerSecond * joystickTickSeconds,
+                Application::VirtualGimbalService::kMinimumPanDegrees,
+                Application::VirtualGimbalService::kMaximumPanDegrees);
+            const double targetTilt = (std::clamp)(
+                tilt + m_joystickTiltAxis * speedDegreesPerSecond * joystickTickSeconds,
+                Application::VirtualGimbalService::kMinimumTiltDegrees,
+                Application::VirtualGimbalService::kMaximumTiltDegrees);
+            CString panText;
+            CString tiltText;
+            panText.Format(L"%.1f", targetPan);
+            tiltText.Format(L"%.1f", targetTilt);
+            m_panEdit.SetWindowText(panText);
+            m_tiltEdit.SetWindowText(tiltText);
+            if (!m_gimbalService.SetPanTilt(targetPan, targetTilt))
+            {
+                m_joystickPanAxis = 0.0;
+                m_joystickTiltAxis = 0.0;
+                m_joystick.Reset();
+                SetOperationStatus(L"조이스틱 명령 전송에 실패했습니다.", false);
+            }
+        }
+        else if (!m_velocityMode && m_positionTargetDirty)
+        {
+            const auto pan = ReadAngle(m_panEdit);
+            const auto tilt = ReadAngle(m_tiltEdit);
+            if (pan && tilt)
+            {
+                if (!m_gimbalService.SetPanTilt(*pan, *tilt))
+                {
+                    m_joystickPanAxis = 0.0;
+                    m_joystickTiltAxis = 0.0;
+                    m_joystick.Reset();
+                    SetOperationStatus(L"조이스틱 명령 전송에 실패했습니다.", false);
+                }
+            }
+            m_positionTargetDirty = false;
+        }
+    }
+    CFrameWnd::OnTimer(timerId);
+}
+
 LRESULT MfcDashboardFrame::OnDeviceEvent(WPARAM, LPARAM)
 {
     if (!m_dashboardBinding || !m_dashboardBinding->HandleMessage(kDeviceEventMessage))
@@ -914,7 +1155,7 @@ LRESULT MfcDashboardFrame::OnWorkflowProgress(WPARAM, LPARAM)
 void MfcDashboardFrame::RefreshDashboardViews()
 {
     const auto state = m_gimbalService.ConnectionState().value_or(Core::ConnectionState::Disconnected);
-    m_connectionStatus.SetWindowText(ConnectionStateText(state));
+    SetControlTextIfChanged(m_connectionStatus, ConnectionStateText(state));
     const auto reconnect = m_gimbalService.GetReconnectStatus();
     CString reconnectText;
     if (!reconnect.enabled)
@@ -931,7 +1172,8 @@ void MfcDashboardFrame::RefreshDashboardViews()
         reconnectText.Format(L"재접속 %u / %u", reconnect.attemptCount,
             reconnect.maximumAttempts);
     }
-    m_reconnectStatus.SetWindowText(reconnectText);
+    SetControlTextIfChanged(m_reconnectStatus, reconnectText);
+    m_packetList.SetRedraw(FALSE);
     m_packetList.ResetContent();
     const auto packets = m_dashboardModel.Packets();
     const auto firstPacket = packets.size() > 100 ? packets.size() - 100 : 0;
@@ -943,6 +1185,9 @@ void MfcDashboardFrame::RefreshDashboardViews()
     {
         m_packetList.SetCurSel(m_packetList.GetCount() - 1);
     }
+    m_packetList.SetRedraw(TRUE);
+    m_packetList.Invalidate(FALSE);
+    m_errorList.SetRedraw(FALSE);
     m_errorList.ResetContent();
     m_alarmIdsByListIndex.clear();
     for (const auto& error : m_dashboardModel.Errors())
@@ -961,6 +1206,8 @@ void MfcDashboardFrame::RefreshDashboardViews()
         m_errorList.AddString(text);
         m_alarmIdsByListIndex.push_back(alarm.id);
     }
+    m_errorList.SetRedraw(TRUE);
+    m_errorList.Invalidate(FALSE);
     CString telemetryText(L"Telemetry: 수신 대기");
     for (auto item = packets.rbegin(); item != packets.rend(); ++item)
     {
@@ -974,6 +1221,7 @@ void MfcDashboardFrame::RefreshDashboardViews()
         {
             continue;
         }
+        m_powerEnabled = telemetry->state != Application::VirtualGimbalState::Offline;
         telemetryText.Format(L"State: %s    Fault: %s    Pan/Tilt: %.2f° / %.2f°    Target: %.2f° / %.2f°\r\nTemp: %.2f°C    Voltage: %.3f V",
             GimbalStateText(telemetry->state), FaultText(telemetry->fault),
             telemetry->panDegrees, telemetry->tiltDegrees,
@@ -993,14 +1241,23 @@ void MfcDashboardFrame::RefreshDashboardViews()
             static_cast<unsigned long long>(quality->outOfOrderFrameCount));
         telemetryText += qualityText;
     }
-    m_telemetryStatus.SetWindowText(telemetryText);
+    SetControlTextIfChanged(m_telemetryStatus, telemetryText);
     const auto heartbeat = m_runtime.HeartbeatWatchdog().StatusFor(m_gimbalService.DeviceId());
     CString heartbeatText;
     heartbeatText.Format(L"Heartbeat: %s    마지막 수신 %lld ms 전",
         HeartbeatStateText(heartbeat.state), heartbeat.ageMilliseconds);
-    m_heartbeatStatus.SetWindowText(heartbeatText);
+    SetControlTextIfChanged(m_heartbeatStatus, heartbeatText);
     UpdateCommandAvailability();
-    Invalidate(FALSE);
+    InvalidateMetrics();
+}
+
+void MfcDashboardFrame::InvalidateMetrics()
+{
+    CRect client;
+    GetClientRect(&client);
+    const auto x = [this, &client](int value) { return LayoutX(value, client.Width()); };
+    const auto y = [this](int value) { return Scale(value); };
+    InvalidateRect(CRect(x(675), y(18), x(1070), y(55)), FALSE);
 }
 
 void MfcDashboardFrame::UpdateCommandAvailability()
@@ -1020,10 +1277,24 @@ void MfcDashboardFrame::UpdateCommandAvailability()
     m_faultCombo.EnableWindow(connected);
     m_responseModeCombo.EnableWindow(connected);
     m_responseDelayEdit.EnableWindow(connected);
+    m_cameraViewCheck.EnableWindow(connected);
+    if (!connected)
+    {
+        m_cameraViewCheck.SetCheck(BST_UNCHECKED);
+    }
     m_startScenarioButton.EnableWindow(!workflowRunning);
     m_startReplayButton.EnableWindow(connected && !workflowRunning);
     m_stopWorkflowButton.EnableWindow(workflowRunning);
     m_acknowledgeAlarmButton.EnableWindow(!m_runtime.Alarms().ActiveAlarms().empty());
+    if (!connected)
+    {
+        m_powerEnabled = false;
+    }
+    const bool fixedCameraMode = m_equipmentModeCombo.GetCurSel() != 1;
+    SetControlEnabledIfChanged(m_joystick,
+        connected && fixedCameraMode && m_powerEnabled);
+    SetControlEnabledIfChanged(m_centerGimbalButton,
+        connected && fixedCameraMode && m_powerEnabled);
 }
 
 void MfcDashboardFrame::RefreshEventHistory()

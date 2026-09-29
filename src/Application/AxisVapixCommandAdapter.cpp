@@ -112,6 +112,7 @@ std::optional<AxisVapixRequest> AxisVapixCommandAdapter::EncodeCommand(
     case GimbalCommandKind::Power:
     case GimbalCommandKind::InjectFault:
     case GimbalCommandKind::ConfigureResponse:
+    case GimbalCommandKind::SetCameraView:
         return std::nullopt;
     }
     return std::nullopt;

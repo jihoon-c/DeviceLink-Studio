@@ -58,13 +58,15 @@ public:
 
     [[nodiscard]] bool Connect(std::string_view host, std::uint16_t port);
     [[nodiscard]] bool Disconnect() noexcept;
-    [[nodiscard]] bool Power(bool enabled);
-    [[nodiscard]] bool Initialize();
-    [[nodiscard]] bool SetPanTilt(double panDegrees, double tiltDegrees);
+    [[nodiscard]] bool Power(bool enabled, std::uint32_t* sentSequence = nullptr);
+    [[nodiscard]] bool Initialize(std::uint32_t* sentSequence = nullptr);
+    [[nodiscard]] bool SetPanTilt(
+        double panDegrees, double tiltDegrees, std::uint32_t* sentSequence = nullptr);
     [[nodiscard]] bool StartScan();
     [[nodiscard]] bool StopScan();
     [[nodiscard]] bool RequestStatus();
-    [[nodiscard]] bool InjectFault(VirtualGimbalFault fault);
+    [[nodiscard]] bool InjectFault(
+        VirtualGimbalFault fault, std::uint32_t* sentSequence = nullptr);
     [[nodiscard]] bool ConfigureResponse(
         VirtualGimbalResponseMode mode, std::uint16_t delayMilliseconds = 0);
     [[nodiscard]] bool SelectEquipmentMode(VirtualEquipmentMode mode);
@@ -72,6 +74,7 @@ public:
     [[nodiscard]] bool DroneLand();
     [[nodiscard]] bool DroneMoveTo(double xMeters, double yMeters, double altitudeMeters);
     [[nodiscard]] bool DroneReturnHome();
+    [[nodiscard]] bool SetCameraView(bool enabled);
     [[nodiscard]] std::optional<Core::ConnectionState> ConnectionState() const;
     [[nodiscard]] const std::string& DeviceId() const noexcept;
     void SetAutomaticReconnectEnabled(bool enabled) noexcept;
@@ -90,7 +93,8 @@ public:
     [[nodiscard]] std::uint16_t DeviceTelemetryMessageType() const noexcept;
 
 private:
-    [[nodiscard]] bool Send(const GimbalCommand& command);
+    [[nodiscard]] bool Send(
+        const GimbalCommand& command, std::uint32_t* sentSequence = nullptr);
     void ReconnectLoop(std::stop_token stopToken) noexcept;
 
     DeviceManager& m_manager;

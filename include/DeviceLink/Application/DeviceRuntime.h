@@ -45,5 +45,6 @@ private:
     TelemetryHeartbeatWatchdog m_heartbeatWatchdog;
     DeviceEventProcessingService m_eventProcessor;
     DeviceManager m_deviceManager;
+    DeviceEventSubscription m_eventSubscription;
 };
 } // namespace DeviceLink::Application

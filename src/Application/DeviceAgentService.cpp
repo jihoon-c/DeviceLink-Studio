@@ -11,6 +11,8 @@ namespace
 {
 constexpr std::uint16_t kSetPanTiltMessageType = 0x1003;
 constexpr std::uint16_t kInjectFaultMessageType = 0x1007;
+constexpr std::uint16_t kPowerMessageType = 0x1001;
+constexpr std::uint16_t kInitializeMessageType = 0x1002;
 
 std::string Normalize(std::string_view value)
 {
@@ -26,6 +28,17 @@ std::string Normalize(std::string_view value)
     }
     return normalized;
 }
+
+std::chrono::milliseconds RemainingUntil(
+    const std::chrono::steady_clock::time_point deadline)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+    {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
 } // namespace
 
 DeviceAgentService::DeviceAgentService(DeviceManager& manager, std::string deviceId)
@@ -33,12 +46,13 @@ DeviceAgentService::DeviceAgentService(DeviceManager& manager, std::string devic
       m_deviceId(std::move(deviceId)),
       m_gimbal(manager, m_deviceId, ReconnectPolicy{.enabled = false})
 {
-    m_manager.SetEventObserver([this](const DeviceEvent& event) { ApplyDeviceEvent(event); });
+    m_eventSubscription = m_manager.SubscribeToEvents(
+        [this](const DeviceEvent& event) { ApplyDeviceEvent(event); });
 }
 
 DeviceAgentService::~DeviceAgentService()
 {
-    m_manager.SetEventObserver({});
+    m_eventSubscription.Reset();
 }
 
 AgentOperationResult DeviceAgentService::ConnectDevice(
@@ -52,6 +66,85 @@ AgentOperationResult DeviceAgentService::ConnectDevice(
         std::to_string(port)};
 }
 
+AgentOperationResult DeviceAgentService::SetPower(
+    const bool enabled, const std::chrono::milliseconds timeout)
+{
+    if (timeout <= std::chrono::milliseconds::zero())
+    {
+        return {false, "Power operation timeout must be positive"};
+    }
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::uint64_t acknowledgementRevision{};
+    std::uint32_t sequence{};
+    {
+        const std::scoped_lock lock(m_mutex);
+        acknowledgementRevision = m_acknowledgementRevision;
+    }
+    if (!m_gimbal.Power(enabled, &sequence))
+    {
+        return {false, "Failed to send power command"};
+    }
+    if (!WaitForAcknowledgement(kPowerMessageType, sequence, acknowledgementRevision,
+            (std::min)(RemainingUntil(deadline), std::chrono::milliseconds(2000))))
+    {
+        return {false, "Power command was not acknowledged"};
+    }
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        auto telemetry = GetTelemetry((std::min)(remaining, std::chrono::milliseconds(750)));
+        if (telemetry.succeeded && telemetry.telemetry &&
+            telemetry.telemetry->state == (enabled ? VirtualGimbalState::Ready
+                                                    : VirtualGimbalState::Offline))
+        {
+            telemetry.message = enabled ? "Device powered on and Ready"
+                                        : "Device powered off and Offline";
+            return telemetry;
+        }
+    }
+    return {false, "Telemetry did not confirm the requested power state"};
+}
+
+AgentOperationResult DeviceAgentService::Initialize(const std::chrono::milliseconds timeout)
+{
+    if (timeout <= std::chrono::milliseconds::zero())
+    {
+        return {false, "Initialization timeout must be positive"};
+    }
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::uint64_t acknowledgementRevision{};
+    std::uint32_t sequence{};
+    {
+        const std::scoped_lock lock(m_mutex);
+        acknowledgementRevision = m_acknowledgementRevision;
+    }
+    if (!m_gimbal.Initialize(&sequence))
+    {
+        return {false, "Failed to send initialize command"};
+    }
+    if (!WaitForAcknowledgement(kInitializeMessageType, sequence, acknowledgementRevision,
+            (std::min)(RemainingUntil(deadline), std::chrono::milliseconds(2000))))
+    {
+        return {false, "Initialize command was not acknowledged"};
+    }
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        auto telemetry = GetTelemetry((std::min)(remaining, std::chrono::milliseconds(750)));
+        if (telemetry.succeeded && telemetry.telemetry &&
+            telemetry.telemetry->state == VirtualGimbalState::Ready)
+        {
+            telemetry.message = "Device initialized and Ready";
+            return telemetry;
+        }
+    }
+    return {false, "Device did not become Ready before initialization timeout"};
+}
+
 AgentOperationResult DeviceAgentService::SetGimbalAngle(
     const double panDegrees, const double tiltDegrees,
     const std::chrono::milliseconds timeout, const double toleranceDegrees)
@@ -62,19 +155,20 @@ AgentOperationResult DeviceAgentService::SetGimbalAngle(
         return {false, "Timeout and angle tolerance must be positive"};
     }
 
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::uint64_t acknowledgementRevision{};
+    std::uint32_t sequence{};
     {
         const std::scoped_lock lock(m_mutex);
         acknowledgementRevision = m_acknowledgementRevision;
     }
-    if (!m_gimbal.SetPanTilt(panDegrees, tiltDegrees))
+    if (!m_gimbal.SetPanTilt(panDegrees, tiltDegrees, &sequence))
     {
         return {false, "Pan or tilt is outside the supported range"};
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    if (!WaitForAcknowledgement(kSetPanTiltMessageType, acknowledgementRevision,
-            (std::min)(timeout, std::chrono::milliseconds(2000))))
+    if (!WaitForAcknowledgement(kSetPanTiltMessageType, sequence, acknowledgementRevision,
+            (std::min)(RemainingUntil(deadline), std::chrono::milliseconds(2000))))
     {
         return {false, "Set-angle command was not acknowledged"};
     }
@@ -148,9 +242,11 @@ AgentOperationResult DeviceAgentService::RunTestScenario(
         return {false, "Unknown scenario. Supported scenario: motor_stall_recovery"};
     }
 
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     AgentOperationResult result{};
     result.steps.push_back("Inject MotorStall fault");
-    const auto injected = InjectFault(VirtualGimbalFault::MotorStall, timeout);
+    const auto injected = InjectFault(
+        VirtualGimbalFault::MotorStall, RemainingUntil(deadline));
     if (!injected.succeeded)
     {
         result.message = "Scenario failed while injecting MotorStall: " + injected.message;
@@ -159,7 +255,7 @@ AgentOperationResult DeviceAgentService::RunTestScenario(
     }
     result.steps.push_back("Observed Fault state with MotorStall");
     result.steps.push_back("Clear active fault");
-    const auto cleared = ClearFault(timeout);
+    const auto cleared = ClearFault(RemainingUntil(deadline));
     result.telemetry = cleared.telemetry;
     if (!cleared.succeeded)
     {
@@ -235,9 +331,10 @@ void DeviceAgentService::ApplyDeviceEvent(const DeviceEvent& event)
 
     bool changed{};
     const auto& frame = received->frame;
-    if (const auto acknowledgement = m_gimbal.DecodeDeviceAcknowledgement(
+    if (auto acknowledgement = m_gimbal.DecodeDeviceAcknowledgement(
             frame.header.messageType, frame.payload))
     {
+        acknowledgement->sequence = frame.header.sequence;
         const std::scoped_lock lock(m_mutex);
         m_lastAcknowledgement = acknowledgement;
         ++m_acknowledgementRevision;
@@ -258,13 +355,15 @@ void DeviceAgentService::ApplyDeviceEvent(const DeviceEvent& event)
 }
 
 bool DeviceAgentService::WaitForAcknowledgement(
-    const std::uint16_t commandType, const std::uint64_t previousRevision,
+    const std::uint16_t commandType, const std::uint32_t sequence,
+    const std::uint64_t previousRevision,
     const std::chrono::milliseconds timeout)
 {
     std::unique_lock lock(m_mutex);
     const bool received = m_condition.wait_for(lock, timeout, [&] {
         return m_acknowledgementRevision > previousRevision && m_lastAcknowledgement &&
-            m_lastAcknowledgement->commandType == commandType;
+            m_lastAcknowledgement->commandType == commandType &&
+            m_lastAcknowledgement->sequence == sequence;
     });
     return received && m_lastAcknowledgement->succeeded;
 }
@@ -288,22 +387,23 @@ AgentOperationResult DeviceAgentService::SetFault(
     {
         return {false, "Fault operation timeout must be positive"};
     }
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::uint64_t acknowledgementRevision{};
+    std::uint32_t sequence{};
     {
         const std::scoped_lock lock(m_mutex);
         acknowledgementRevision = m_acknowledgementRevision;
     }
-    if (!m_gimbal.InjectFault(fault))
+    if (!m_gimbal.InjectFault(fault, &sequence))
     {
         return {false, "Failed to send fault command"};
     }
-    if (!WaitForAcknowledgement(kInjectFaultMessageType, acknowledgementRevision,
-            (std::min)(timeout, std::chrono::milliseconds(2000))))
+    if (!WaitForAcknowledgement(kInjectFaultMessageType, sequence, acknowledgementRevision,
+            (std::min)(RemainingUntil(deadline), std::chrono::milliseconds(2000))))
     {
         return {false, "Fault command was not acknowledged"};
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline)
     {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(

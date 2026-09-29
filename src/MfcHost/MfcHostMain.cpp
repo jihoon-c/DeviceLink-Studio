@@ -79,8 +79,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int commandShow)
     }
 
     application.m_pMainWnd = &dashboard;
-    dashboard.ShowWindow(commandShow);
+    const int showCommand = commandShow == SW_HIDE ? SW_SHOWNORMAL : commandShow;
+    dashboard.ShowWindow(showCommand);
     dashboard.UpdateWindow();
+    dashboard.SetForegroundWindow();
     MSG message{};
     while (GetMessage(&message, nullptr, 0, 0) > 0)
     {

@@ -14,6 +14,26 @@
 namespace DeviceLink::Application
 {
 
+class DeviceManager;
+
+class DeviceEventSubscription final
+{
+public:
+    DeviceEventSubscription() = default;
+    ~DeviceEventSubscription();
+    DeviceEventSubscription(const DeviceEventSubscription&) = delete;
+    DeviceEventSubscription& operator=(const DeviceEventSubscription&) = delete;
+    DeviceEventSubscription(DeviceEventSubscription&& other) noexcept;
+    DeviceEventSubscription& operator=(DeviceEventSubscription&& other) noexcept;
+    void Reset() noexcept;
+
+private:
+    friend class DeviceManager;
+    DeviceEventSubscription(DeviceManager& manager, std::uint64_t observerId) noexcept;
+    DeviceManager* m_manager{};
+    std::uint64_t m_observerId{};
+};
+
 class DeviceManager final
 {
 public:
@@ -35,18 +55,22 @@ public:
     [[nodiscard]] std::optional<Core::ConnectionState> GetConnectionState(
         const std::string& deviceId) const;
     [[nodiscard]] std::size_t DeviceCount() const noexcept;
+    [[nodiscard]] DeviceEventSubscription SubscribeToEvents(EventObserver eventObserver);
     void SetEventObserver(EventObserver eventObserver);
     [[nodiscard]] DeviceEventQueue& Events() noexcept;
     [[nodiscard]] const DeviceEventQueue& Events() const noexcept;
 
 private:
+    friend class DeviceEventSubscription;
+    void RemoveEventObserver(std::uint64_t observerId) noexcept;
     void PublishEvent(DeviceEvent event);
 
     mutable std::shared_mutex m_mutex;
     std::unordered_map<std::string, Core::ConnectionStateMachine> m_devices;
     DeviceEventQueue m_events;
     std::unordered_map<std::string, std::shared_ptr<Core::DeviceSession>> m_sessions;
-    EventObserver m_eventObserver;
+    std::unordered_map<std::uint64_t, EventObserver> m_eventObservers;
+    std::uint64_t m_nextObserverId{1};
 };
 
 } // namespace DeviceLink::Application

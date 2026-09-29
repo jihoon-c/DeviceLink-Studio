@@ -193,7 +193,46 @@ Agent는 `search_manual`로 다음 로컬 문서를 검색합니다.
 
 Agent는 검색 결과에서 Fault 종류를 결정한 뒤 장비 도구 또는 자동 시험 시나리오를 호출합니다.
 
-## 8. 프로세스 종료와 재시작
+## 8. Codex 없이 자연어 명령 사용
+
+MCP 서버는 `execute_instruction` 도구를 제공하며, 한국어 또는 영어 복합 명령을 한 번에
+해석합니다. 각도 이동 명령은 필요할 때 자동으로 연결, 전원 ON, 초기화를 선행합니다.
+
+MCP 클라이언트에서 직접 호출하는 예:
+
+```json
+{
+  "name": "execute_instruction",
+  "arguments": {
+    "instruction": "127.0.0.1:5000에 연결하고 Pan 30도, Tilt -10도로 이동해줘"
+  }
+}
+```
+
+Codex나 별도 MCP 클라이언트 없이 Windows 콘솔에서 바로 입력하려면:
+
+```powershell
+.\run-natural-language-console.bat
+```
+
+대화형 프롬프트에 다음처럼 입력합니다.
+
+```text
+DeviceLink> Pan 30도, Tilt -10도로 이동해줘
+DeviceLink> 현재 Telemetry 상태 확인해줘
+DeviceLink> MotorStall을 주입하고 복구 시험해줘
+```
+
+한 번만 실행할 수도 있습니다.
+
+```powershell
+.\run-natural-language-console.bat "Pan 30도, Tilt -10도로 이동해줘"
+```
+
+자연어 해석은 외부 LLM이 아니라 서버 내부의 허용 목록 기반 결정적 파서입니다. 지원하지
+않거나 모호한 문장은 장비 명령을 보내지 않고 오류를 반환합니다.
+
+## 9. 프로세스 종료와 재시작
 
 - Unreal 종료: 게임 창을 닫습니다.
 - MCP 서버 종료: Codex 작업 또는 앱 종료 시 STDIO 프로세스가 종료됩니다.
@@ -201,7 +240,7 @@ Agent는 검색 결과에서 Fault 종류를 결정한 뒤 장비 도구 또는 
 - 새 Codex 작업이나 MCP 재시작 후에는 `connect_device`를 다시 호출합니다.
 - 같은 Codex 작업 안에서는 브리지가 TCP 연결과 최신 Telemetry 상태를 유지합니다.
 
-## 9. 문제 해결
+## 10. 문제 해결
 
 ### MCP 목록에 devicelink가 없음
 

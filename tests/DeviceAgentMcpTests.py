@@ -40,6 +40,7 @@ class VirtualDevice(threading.Thread):
         self.pan = 0
         self.tilt = 0
         self.fault = 0
+        self.state = 0
         self.failure: BaseException | None = None
 
     def run(self) -> None:
@@ -60,14 +61,21 @@ class VirtualDevice(threading.Thread):
                         packet, buffer = buffer[:size], buffer[size:]
                         message_type, sequence = struct.unpack_from(">HI", packet, 4)
                         payload = packet[14:-2]
-                        if message_type == 0x1003:
+                        if message_type == 0x1001:
+                            self.state = 1 if payload[0] else 0
+                        elif message_type == 0x1002:
+                            self.pan = 0
+                            self.tilt = 0
+                            self.fault = 0
+                            self.state = 1
+                        elif message_type == 0x1003:
                             self.pan, self.tilt = struct.unpack(">hh", payload)
                         elif message_type == 0x1007:
                             self.fault = payload[0]
                         acknowledgement = struct.pack(">HB", message_type, 0)
                         connection.sendall(frame(0x6001, sequence, acknowledgement))
-                        if message_type in {0x1003, 0x1006, 0x1007}:
-                            state = 4 if self.fault else 1
+                        if message_type in {0x1001, 0x1002, 0x1003, 0x1006, 0x1007}:
+                            state = 4 if self.fault else self.state
                             telemetry = struct.pack(
                                 ">BBhhhhhH",
                                 state,
@@ -104,6 +112,8 @@ class DeviceAgentBridgeTests(unittest.TestCase):
 
         try:
             self.assertTrue(call(f"CONNECT 127.0.0.1 {device.port}")["ok"])
+            self.assertTrue(call("POWER_ON 2000")["ok"])
+            self.assertTrue(call("INITIALIZE 2000")["ok"])
             angle = call("SET_ANGLE 30 -10 2000 0.1")
             self.assertTrue(angle["ok"])
             self.assertEqual(angle["telemetry"]["pan_degrees"], 30)
@@ -138,16 +148,91 @@ class McpServerTests(unittest.TestCase):
         cls.server = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.server)
 
-    def test_lists_six_device_tools_and_manual_search(self) -> None:
+    def test_lists_device_tools_natural_language_and_manual_search(self) -> None:
         response = self.server.handle(None, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         names = {tool["name"] for tool in response["result"]["tools"]}
         self.assertTrue({
             "connect_device", "set_gimbal_angle", "get_telemetry",
             "inject_fault", "clear_fault", "run_test_scenario", "search_manual",
+            "power_on", "power_off", "initialize_device", "execute_instruction",
         }.issubset(names))
         result = self.server.call_tool(None, "search_manual", {"query": "Motor Stall recovery", "limit": 2})
         self.assertTrue(result["ok"])
         self.assertIn("MotorStall", result["matches"][0]["excerpt"])
+
+    def test_korean_natural_language_angle_command_auto_prepares_device(self) -> None:
+        class FakeBridge:
+            connected_endpoint = None
+
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def call(self, command: str) -> dict[str, object]:
+                self.commands.append(command)
+                if command.startswith("CONNECT "):
+                    self.connected_endpoint = ("127.0.0.1", 5000)
+                result: dict[str, object] = {"ok": True, "message": "ok"}
+                if command.startswith("SET_ANGLE "):
+                    result["telemetry"] = {"pan_degrees": 30, "tilt_degrees": -10, "state": "Ready"}
+                return result
+
+        bridge = FakeBridge()
+        result = self.server.call_tool(
+            bridge,
+            "execute_instruction",
+            {"instruction": "Pan 30도, Tilt -10도로 이동해줘"},
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(bridge.commands, [
+            "CONNECT 127.0.0.1 5000",
+            "POWER_ON 3000",
+            "INITIALIZE 5000",
+            "SET_ANGLE 30 -10 5000 0.5",
+        ])
+        self.assertEqual(result["telemetry"]["tilt_degrees"], -10)
+
+    def test_natural_language_rejects_incomplete_angle(self) -> None:
+        class FakeBridge:
+            connected_endpoint = None
+
+        with self.assertRaisesRegex(ValueError, "Both Pan and Tilt"):
+            self.server.call_tool(
+                FakeBridge(), "execute_instruction", {"instruction": "Pan 30도로 이동"})
+
+    def test_natural_language_reconnects_when_requested_endpoint_changes(self) -> None:
+        class FakeBridge:
+            connected_endpoint = ("10.0.0.1", 5000)
+
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+                self.connected_endpoint = None
+
+            def call(self, command: str) -> dict[str, object]:
+                self.commands.append(command)
+                if command.startswith("CONNECT "):
+                    self.connected_endpoint = ("127.0.0.1", 5000)
+                return {"ok": True, "message": "ok"}
+
+        bridge = FakeBridge()
+        result = self.server.call_tool(
+            bridge,
+            "execute_instruction",
+            {
+                "instruction": "현재 Telemetry 상태 확인해줘",
+                "host": "127.0.0.1",
+                "port": 5000,
+            },
+        )
+        self.assertTrue(result["ok"])
+        self.assertTrue(bridge.closed)
+        self.assertEqual(bridge.commands, [
+            "CONNECT 127.0.0.1 5000",
+            "GET_TELEMETRY 2000",
+        ])
 
 
 if __name__ == "__main__":

@@ -24,14 +24,14 @@ DeviceRuntime::DeviceRuntime(
         m_eventProcessor.Process(event);
         m_deviceManager.Events().Push(std::move(event));
     });
-    m_deviceManager.SetEventObserver([this](const DeviceEvent& event) {
+    m_eventSubscription = m_deviceManager.SubscribeToEvents([this](const DeviceEvent& event) {
         m_eventProcessor.Process(event);
     });
 }
 
 DeviceRuntime::~DeviceRuntime()
 {
-    m_deviceManager.SetEventObserver({});
+    m_eventSubscription.Reset();
     m_heartbeatWatchdog.Stop();
 }
 

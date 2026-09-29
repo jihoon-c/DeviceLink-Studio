@@ -532,6 +532,51 @@ void WorkerEventsAreQueuedInFifoOrder()
     Require(queue.Drain().empty(), "Drain did not empty the queue");
 }
 
+void ManagerNotifiesIndependentEventSubscribers()
+{
+    DeviceLink::Application::DeviceManager manager;
+    Require(manager.RegisterDevice("observer-device"), "Observer device registration failed");
+    Require(manager.AttachTransport("observer-device", std::make_unique<QueueingTransport>()),
+            "Observer transport attachment failed");
+
+    std::size_t legacyCount = 0;
+    std::size_t firstCount = 0;
+    std::size_t secondCount = 0;
+    manager.SetEventObserver([&](const DeviceLink::Application::DeviceEvent&) {
+        ++legacyCount;
+    });
+    auto first = manager.SubscribeToEvents(
+        [&](const DeviceLink::Application::DeviceEvent&) { ++firstCount; });
+    auto second = manager.SubscribeToEvents(
+        [&](const DeviceLink::Application::DeviceEvent&) { ++secondCount; });
+
+    Require(manager.ConnectDevice("observer-device", "loopback", 5000),
+            "Observer device connection failed");
+    Require(legacyCount > 0 && legacyCount == firstCount && firstCount == secondCount,
+            "Connection event was not delivered to every observer");
+
+    const auto baselineCount = legacyCount;
+
+    first.Reset();
+    DeviceLink::Protocol::PacketFrame frame{};
+    frame.header.messageType = 0x1001;
+    frame.header.sequence = 1;
+    Require(manager.SendFrame("observer-device", frame), "Observer test frame send failed");
+    Require(legacyCount == baselineCount + 1 && firstCount == baselineCount &&
+                secondCount == baselineCount + 1,
+            "Reset subscription still received events or removed another observer");
+
+    manager.SetEventObserver({});
+    frame.header.sequence = 2;
+    Require(manager.SendFrame("observer-device", frame),
+            "Second observer test frame send failed");
+    Require(legacyCount == baselineCount + 1 && firstCount == baselineCount &&
+                secondCount == baselineCount + 2,
+            "Legacy observer removal affected an independent subscription");
+    Require(manager.DisconnectDevice("observer-device"),
+            "Observer device disconnection failed");
+}
+
 void WindowBridgeDispatchesQueuedEventsOnDemand()
 {
     DeviceLink::Application::DeviceEventQueue queue;
@@ -1814,13 +1859,15 @@ void VirtualGimbalServiceBuildsCommandsAndDecodesResponses()
     Require(service.SelectEquipmentMode(
                 DeviceLink::Application::VirtualEquipmentMode::Drone),
             "Drone mode command failed");
+    Require(service.SetCameraView(true), "Camera view enable command failed");
+    Require(service.SetCameraView(false), "Camera view disable command failed");
     Require(service.DroneTakeOff(), "Drone take-off command failed");
     Require(service.DroneMoveTo(125.4, -32.1, 10.0), "Drone move command failed");
     Require(service.DroneLand(), "Drone land command failed");
     Require(service.DroneReturnHome(), "Drone return-home command failed");
 
     const auto serializedFrames = transportView->SentFrames();
-    Require(serializedFrames.size() == 13, "Unexpected gimbal command count");
+    Require(serializedFrames.size() == 15, "Unexpected gimbal command count");
     DeviceLink::Protocol::FrameStreamParser parser;
     std::vector<DeviceLink::Protocol::PacketFrame> frames;
     for (const auto& bytes : serializedFrames)
@@ -1841,7 +1888,11 @@ void VirtualGimbalServiceBuildsCommandsAndDecodesResponses()
             "Response delay payload differs");
     Require(frames[8].header.messageType == 0x1009 && frames[8].payload ==
             std::vector<std::byte>{std::byte{1}}, "Equipment mode payload differs");
-    Require(frames[10].header.messageType == 0x1012 && frames[10].payload ==
+    Require(frames[9].header.messageType == 0x1014 && frames[9].payload ==
+            std::vector<std::byte>{std::byte{1}} &&
+            frames[10].header.messageType == 0x1014 && frames[10].payload ==
+            std::vector<std::byte>{std::byte{0}}, "Camera view payload differs");
+    Require(frames[12].header.messageType == 0x1012 && frames[12].payload ==
             std::vector<std::byte>{std::byte{0x04}, std::byte{0xE6},
                                    std::byte{0xFE}, std::byte{0xBF},
                                    std::byte{0x00}, std::byte{0x64}},
@@ -2190,6 +2241,7 @@ int main()
         DeviceLifecycleTransitionsAreValidated();
         FaultRecoveryAndRemovalAreHandled();
         WorkerEventsAreQueuedInFifoOrder();
+        ManagerNotifiesIndependentEventSubscribers();
         WindowBridgeDispatchesQueuedEventsOnDemand();
         DashboardModelRetainsDisplayHistory();
         DashboardBindingAppliesEventsAndRequestsRefresh();

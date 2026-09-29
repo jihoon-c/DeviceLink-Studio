@@ -85,17 +85,18 @@ bool VirtualGimbalService::Disconnect() noexcept
     return m_manager.DisconnectDevice(m_deviceId);
 }
 
-bool VirtualGimbalService::Power(bool enabled)
+bool VirtualGimbalService::Power(bool enabled, std::uint32_t* sentSequence)
 {
-    return Send({.kind = GimbalCommandKind::Power, .powerEnabled = enabled});
+    return Send({.kind = GimbalCommandKind::Power, .powerEnabled = enabled}, sentSequence);
 }
 
-bool VirtualGimbalService::Initialize()
+bool VirtualGimbalService::Initialize(std::uint32_t* sentSequence)
 {
-    return Send({.kind = GimbalCommandKind::Initialize});
+    return Send({.kind = GimbalCommandKind::Initialize}, sentSequence);
 }
 
-bool VirtualGimbalService::SetPanTilt(double panDegrees, double tiltDegrees)
+bool VirtualGimbalService::SetPanTilt(
+    double panDegrees, double tiltDegrees, std::uint32_t* sentSequence)
 {
     if (!std::isfinite(panDegrees) || !std::isfinite(tiltDegrees) ||
         panDegrees < kMinimumPanDegrees || panDegrees > kMaximumPanDegrees ||
@@ -107,7 +108,7 @@ bool VirtualGimbalService::SetPanTilt(double panDegrees, double tiltDegrees)
         .kind = GimbalCommandKind::SetPanTilt,
         .panDegrees = panDegrees,
         .tiltDegrees = tiltDegrees,
-    });
+    }, sentSequence);
 }
 
 bool VirtualGimbalService::StartScan()
@@ -125,14 +126,15 @@ bool VirtualGimbalService::RequestStatus()
     return Send({.kind = GimbalCommandKind::RequestStatus});
 }
 
-bool VirtualGimbalService::InjectFault(VirtualGimbalFault fault)
+bool VirtualGimbalService::InjectFault(
+    VirtualGimbalFault fault, std::uint32_t* sentSequence)
 {
     if (static_cast<std::uint8_t>(fault) >
         static_cast<std::uint8_t>(VirtualGimbalFault::SensorFailure))
     {
         return false;
     }
-    return Send({.kind = GimbalCommandKind::InjectFault, .fault = fault});
+    return Send({.kind = GimbalCommandKind::InjectFault, .fault = fault}, sentSequence);
 }
 
 bool VirtualGimbalService::ConfigureResponse(
@@ -168,6 +170,11 @@ bool VirtualGimbalService::DroneMoveTo(double xMeters, double yMeters, double al
         .droneYmeters = yMeters, .droneAltitudeMeters = altitudeMeters});
 }
 bool VirtualGimbalService::DroneReturnHome() { return Send({.kind = GimbalCommandKind::DroneReturnHome}); }
+
+bool VirtualGimbalService::SetCameraView(const bool enabled)
+{
+    return Send({.kind = GimbalCommandKind::SetCameraView, .cameraViewEnabled = enabled});
+}
 
 std::optional<Core::ConnectionState> VirtualGimbalService::ConnectionState() const
 {
@@ -251,11 +258,20 @@ std::uint16_t VirtualGimbalService::DeviceTelemetryMessageType() const noexcept
     return m_protocolAdapter->TelemetryMessageType();
 }
 
-bool VirtualGimbalService::Send(const GimbalCommand& command)
+bool VirtualGimbalService::Send(
+    const GimbalCommand& command, std::uint32_t* sentSequence)
 {
-    const auto frame = m_protocolAdapter->EncodeCommand(
-        command, m_nextSequence.fetch_add(1, std::memory_order_relaxed));
-    return frame && m_manager.SendFrame(m_deviceId, *frame);
+    const auto sequence = m_nextSequence.fetch_add(1, std::memory_order_relaxed);
+    const auto frame = m_protocolAdapter->EncodeCommand(command, sequence);
+    if (!frame || !m_manager.SendFrame(m_deviceId, *frame))
+    {
+        return false;
+    }
+    if (sentSequence != nullptr)
+    {
+        *sentSequence = sequence;
+    }
+    return true;
 }
 
 void VirtualGimbalService::ReconnectLoop(std::stop_token stopToken) noexcept

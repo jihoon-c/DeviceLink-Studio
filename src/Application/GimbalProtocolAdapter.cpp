@@ -20,6 +20,7 @@ constexpr std::uint16_t kDroneTakeOffMessageType = 0x1010;
 constexpr std::uint16_t kDroneLandMessageType = 0x1011;
 constexpr std::uint16_t kDroneMoveToMessageType = 0x1012;
 constexpr std::uint16_t kDroneReturnHomeMessageType = 0x1013;
+constexpr std::uint16_t kSetCameraViewMessageType = 0x1014;
 
 void WriteInt16BigEndian(std::span<std::byte> output, std::size_t offset, std::int16_t value)
 {
@@ -136,6 +137,9 @@ std::optional<Protocol::PacketFrame> DeviceLinkGimbalProtocolAdapter::EncodeComm
     }
     case GimbalCommandKind::DroneReturnHome:
         return MakeFrame(kDroneReturnHomeMessageType, sequence);
+    case GimbalCommandKind::SetCameraView:
+        return MakeFrame(kSetCameraViewMessageType, sequence,
+            std::array{command.cameraViewEnabled ? std::byte{1} : std::byte{0}});
     }
     return std::nullopt;
 }
@@ -149,6 +153,7 @@ DeviceLinkGimbalProtocolAdapter::DecodeAcknowledgement(
         return std::nullopt;
     }
     return VirtualGimbalAcknowledgement{
+        .sequence = 0,
         .commandType = ReadUint16BigEndian(payload, 0),
         .succeeded = std::to_integer<std::uint8_t>(payload[2]) == 0,
     };

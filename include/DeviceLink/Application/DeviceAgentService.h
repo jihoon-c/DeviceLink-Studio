@@ -33,6 +33,11 @@ public:
 
     [[nodiscard]] AgentOperationResult ConnectDevice(
         std::string_view host, std::uint16_t port);
+    [[nodiscard]] AgentOperationResult SetPower(
+        bool enabled,
+        std::chrono::milliseconds timeout = std::chrono::seconds(3));
+    [[nodiscard]] AgentOperationResult Initialize(
+        std::chrono::milliseconds timeout = std::chrono::seconds(5));
     [[nodiscard]] AgentOperationResult SetGimbalAngle(
         double panDegrees, double tiltDegrees,
         std::chrono::milliseconds timeout = std::chrono::seconds(5),
@@ -57,7 +62,8 @@ public:
 private:
     void ApplyDeviceEvent(const DeviceEvent& event);
     [[nodiscard]] bool WaitForAcknowledgement(
-        std::uint16_t commandType, std::uint64_t previousRevision,
+        std::uint16_t commandType, std::uint32_t sequence,
+        std::uint64_t previousRevision,
         std::chrono::milliseconds timeout);
     [[nodiscard]] std::optional<VirtualGimbalTelemetry> WaitForTelemetry(
         std::uint64_t previousRevision, std::chrono::milliseconds timeout);
@@ -73,6 +79,7 @@ private:
     std::optional<VirtualGimbalTelemetry> m_lastTelemetry;
     std::uint64_t m_acknowledgementRevision{};
     std::uint64_t m_telemetryRevision{};
+    DeviceEventSubscription m_eventSubscription;
 };
 
 } // namespace DeviceLink::Application

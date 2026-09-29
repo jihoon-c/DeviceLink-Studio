@@ -153,6 +153,7 @@ if(DEVICELINK_BUILD_MFC_INTEGRATION)
     set(CMAKE_MFC_FLAG 2)
 
     add_library(DeviceLinkMfcIntegration STATIC
+        src/UI/GimbalJoystickControl.cpp
         src/UI/MfcDashboardFrame.cpp
     )
     target_include_directories(DeviceLinkMfcIntegration
@@ -268,4 +269,16 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME InfrastructureTests COMMAND InfrastructureTests)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME DeviceAgentMcpTests
+            COMMAND ${CMAKE_COMMAND} -E env
+                "DEVICELINK_AGENT_BRIDGE=$<TARGET_FILE:DeviceLinkAgentBridge>"
+                ${Python3_EXECUTABLE} -m unittest tests.DeviceAgentMcpTests
+        )
+        set_tests_properties(DeviceAgentMcpTests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
 endif()
