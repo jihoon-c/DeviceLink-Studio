@@ -19,12 +19,14 @@ bool UGimbalDeviceComponent::SetPower(const bool bPowerOn)
 {
 	if (!bPowerOn)
 	{
+		bPowerEnabled = false;
 		Snapshot.State = EGimbalDeviceState::Offline;
 		Snapshot.Fault = EGimbalDeviceFault::None;
 		return true;
 	}
 	if (Snapshot.State == EGimbalDeviceState::Offline)
 	{
+		bPowerEnabled = true;
 		Snapshot.State = EGimbalDeviceState::Ready;
 		return true;
 	}
@@ -86,9 +88,7 @@ void UGimbalDeviceComponent::InjectFault(const EGimbalDeviceFault NewFault)
 	}
 	if (NewFault == EGimbalDeviceFault::None)
 	{
-		Snapshot.State = Snapshot.State == EGimbalDeviceState::Offline
-			? EGimbalDeviceState::Offline
-			: EGimbalDeviceState::Ready;
+		Snapshot.State = bPowerEnabled ? EGimbalDeviceState::Ready : EGimbalDeviceState::Offline;
 		return;
 	}
 	Snapshot.State = EGimbalDeviceState::Fault;

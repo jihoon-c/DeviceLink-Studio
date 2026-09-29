@@ -7,11 +7,16 @@
 #include "VirtualGimbalDevice.generated.h"
 
 class UPointLightComponent;
+class UCameraComponent;
 class UPoseableMeshComponent;
+class USceneCaptureComponent2D;
 class USceneComponent;
 class UStaticMeshComponent;
+class UTextureRenderTarget2D;
 class UGimbalDeviceComponent;
 class UVirtualDeviceNetworkComponent;
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVirtualDeviceCameraViewRequested, bool);
 
 UCLASS(Blueprintable)
 class UNREALVIRTUALDEVICE_API AVirtualGimbalDevice final : public AActor
@@ -25,15 +30,28 @@ public:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaTime) override;
 	bool ApplyEndpointConfiguration(int32 ListenPort, bool bAllowLanConnections);
+	UTextureRenderTarget2D* GetSensorRenderTarget() const;
+	FOnVirtualDeviceCameraViewRequested& OnCameraViewRequested();
 
 private:
-	void HandleMessage(const FVirtualDeviceMessage& Message);
-	void SendAcknowledge(uint32 Sequence, uint16 CommandType, bool bSucceeded);
-	void SendAcknowledgeImmediately(uint32 Sequence, uint16 CommandType, bool bSucceeded);
-	void SendResponse(FVirtualDeviceMessage Message);
+	struct FClientResponseConfiguration final
+	{
+		EVirtualDeviceResponseMode Mode = EVirtualDeviceResponseMode::Normal;
+		uint16 DelayMilliseconds = 0;
+	};
+
+	void HandleMessage(uint64 ClientId, const FVirtualDeviceMessage& Message);
+	void HandleClientDisconnected(uint64 ClientId);
+	void SendAcknowledge(uint64 ClientId, uint32 Sequence, uint16 CommandType, bool bSucceeded);
+	void SendAcknowledgeImmediately(
+		uint64 ClientId, uint32 Sequence, uint16 CommandType, bool bSucceeded);
+	void SendResponse(uint64 ClientId, FVirtualDeviceMessage Message);
 	void PublishTelemetry();
+	void PublishTelemetryToClient(uint64 ClientId);
 	TArray<uint8> CreateTelemetryPayload() const;
 	void UpdateVisualState();
+	void LoadConnectedArticulatedMeshes();
+	void InitializeSensorCamera();
 	bool IsDroneMode() const;
 
 	UPROPERTY(VisibleAnywhere, Category="DeviceLink|Components")
@@ -64,6 +82,15 @@ private:
 	TObjectPtr<UPointLightComponent> StatusLight;
 
 	UPROPERTY(VisibleAnywhere, Category="DeviceLink|Components")
+	TObjectPtr<USceneCaptureComponent2D> SensorCapture;
+
+	UPROPERTY(VisibleAnywhere, Category="DeviceLink|Components")
+	TObjectPtr<UCameraComponent> SensorViewCamera;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> SensorRenderTarget;
+
+	UPROPERTY(VisibleAnywhere, Category="DeviceLink|Components")
 	TObjectPtr<UGimbalDeviceComponent> DeviceState;
 
 	UPROPERTY(VisibleAnywhere, Category="DeviceLink|Components")
@@ -74,9 +101,9 @@ private:
 
 	FTimerHandle TelemetryTimer;
 	uint32 TelemetrySequence = 1;
-	EVirtualDeviceResponseMode ResponseMode = EVirtualDeviceResponseMode::Normal;
-	uint16 ResponseDelayMilliseconds = 0;
+	TMap<uint64, FClientResponseConfiguration> ClientResponseConfigurations;
 	bool bDroneMode = false;
 	bool bDroneAirborne = false;
 	FVector DroneTargetLocation = FVector::ZeroVector;
+	FOnVirtualDeviceCameraViewRequested CameraViewRequestedDelegate;
 };

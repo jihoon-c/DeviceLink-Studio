@@ -8,9 +8,12 @@
 
 class FVirtualDeviceTcpServer;
 
-DECLARE_MULTICAST_DELEGATE_OneParam(
+DECLARE_MULTICAST_DELEGATE_TwoParams(
 	FOnVirtualDeviceMessageReceived,
+	uint64,
 	const FVirtualDeviceMessage&);
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnVirtualDeviceClientDisconnected, uint64);
 
 UCLASS(ClassGroup=(DeviceLink), meta=(BlueprintSpawnableComponent))
 class UNREALVIRTUALDEVICE_API UVirtualDeviceNetworkComponent final : public UActorComponent
@@ -29,9 +32,12 @@ public:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 	bool SendMessage(const FVirtualDeviceMessage& Message);
+	bool SendMessageToClient(uint64 ClientId, const FVirtualDeviceMessage& Message);
 	bool StartListening(int32 InListenPort, bool bInAllowLanConnections = false);
 	bool IsClientConnected() const;
+	TArray<uint64> ConnectedClientIds() const;
 	FOnVirtualDeviceMessageReceived& OnMessageReceived();
+	FOnVirtualDeviceClientDisconnected& OnClientDisconnected();
 
 private:
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Network", meta=(ClampMin="1", ClampMax="65535"))
@@ -44,6 +50,8 @@ private:
 	bool bAllowLanConnections = false;
 
 	TSharedPtr<FVirtualDeviceTcpServer> Server;
-	TArray<uint8> ReceiveFrameBuffer;
+	TMap<uint64, TArray<uint8>> ReceiveFrameBuffers;
+	TSet<uint64> ConnectedClients;
 	FOnVirtualDeviceMessageReceived MessageReceivedDelegate;
+	FOnVirtualDeviceClientDisconnected ClientDisconnectedDelegate;
 };

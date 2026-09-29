@@ -1,11 +1,16 @@
 #include "VirtualGimbalDevice.h"
 
+#include "CameraViewStatusComponent.h"
+
+#include "Camera/CameraComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "GimbalDeviceComponent.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
@@ -76,6 +81,22 @@ AVirtualGimbalDevice::AVirtualGimbalDevice()
 	StatusLight->SetIntensity(2500.0F);
 	StatusLight->SetAttenuationRadius(220.0F);
 
+	SensorCapture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("SensorCapture"));
+	SensorCapture->SetupAttachment(TiltPivot);
+	SensorCapture->SetRelativeLocation(FVector(170.0F, 0.0F, 25.0F));
+	SensorCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	SensorCapture->FOVAngle = 45.0F;
+	SensorCapture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+	SensorCapture->bCaptureEveryFrame = true;
+	SensorCapture->bCaptureOnMovement = true;
+    SensorViewCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("SensorViewCamera"));
+    CreateDefaultSubobject<UCameraViewStatusComponent>(TEXT("CameraViewStatus"));
+	SensorViewCamera->SetupAttachment(TiltPivot);
+	SensorViewCamera->SetRelativeLocation(FVector(170.0F, 0.0F, 25.0F));
+	SensorViewCamera->SetRelativeRotation(FRotator::ZeroRotator);
+	SensorViewCamera->FieldOfView = 45.0F;
+	SensorViewCamera->SetActive(true);
+
 	DeviceState = CreateDefaultSubobject<UGimbalDeviceComponent>(TEXT("DeviceState"));
 	Network = CreateDefaultSubobject<UVirtualDeviceNetworkComponent>(TEXT("Network"));
 
@@ -111,7 +132,11 @@ AVirtualGimbalDevice::AVirtualGimbalDevice()
 void AVirtualGimbalDevice::BeginPlay()
 {
 	Super::BeginPlay();
+	LoadConnectedArticulatedMeshes();
+	InitializeSensorCamera();
 	Network->OnMessageReceived().AddUObject(this, &AVirtualGimbalDevice::HandleMessage);
+	Network->OnClientDisconnected().AddUObject(
+		this, &AVirtualGimbalDevice::HandleClientDisconnected);
 	GetWorldTimerManager().SetTimer(
 		TelemetryTimer,
 		this,
@@ -124,6 +149,10 @@ void AVirtualGimbalDevice::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearAllTimersForObject(this);
 	Network->OnMessageReceived().RemoveAll(this);
+	Network->OnClientDisconnected().RemoveAll(this);
+	ClientResponseConfigurations.Reset();
+	SensorCapture->TextureTarget = nullptr;
+	SensorRenderTarget = nullptr;
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -146,7 +175,74 @@ bool AVirtualGimbalDevice::ApplyEndpointConfiguration(
 	return Network->StartListening(ListenPort, bAllowLanConnections);
 }
 
-void AVirtualGimbalDevice::HandleMessage(const FVirtualDeviceMessage& Message)
+UTextureRenderTarget2D* AVirtualGimbalDevice::GetSensorRenderTarget() const
+{
+	return SensorRenderTarget;
+}
+
+FOnVirtualDeviceCameraViewRequested& AVirtualGimbalDevice::OnCameraViewRequested()
+{
+	return CameraViewRequestedDelegate;
+}
+
+void AVirtualGimbalDevice::LoadConnectedArticulatedMeshes()
+{
+	if (GimbalMesh->GetSkinnedAsset() != nullptr)
+	{
+		return;
+	}
+
+	UStaticMesh* ConnectedBase = LoadObject<UStaticMesh>(
+		nullptr,
+		TEXT("/Game/DeviceLink/Equipment/Articulated/SM_DLS_FixedDualSensor_Base_Connected.SM_DLS_FixedDualSensor_Base_Connected"));
+	UStaticMesh* ConnectedPan = LoadObject<UStaticMesh>(
+		nullptr,
+		TEXT("/Game/DeviceLink/Equipment/Articulated/SM_DLS_FixedDualSensor_Pan_Connected.SM_DLS_FixedDualSensor_Pan_Connected"));
+	UStaticMesh* ConnectedTilt = LoadObject<UStaticMesh>(
+		nullptr,
+		TEXT("/Game/DeviceLink/Equipment/Articulated/SM_DLS_FixedDualSensor_Tilt_Connected.SM_DLS_FixedDualSensor_Tilt_Connected"));
+	if (!IsValid(ConnectedBase) || !IsValid(ConnectedPan) || !IsValid(ConnectedTilt))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Connected fixed-camera meshes are not available."));
+		return;
+	}
+
+	BaseMesh->SetStaticMesh(ConnectedBase);
+	PanHousingMesh->SetStaticMesh(ConnectedPan);
+	SensorMesh->SetStaticMesh(ConnectedTilt);
+}
+
+void AVirtualGimbalDevice::InitializeSensorCamera()
+{
+	FVector CameraLocation;
+	FRotator CameraRotation;
+	if (GimbalMesh->GetSkinnedAsset() != nullptr)
+	{
+		CameraLocation = FVector(170.0F, 0.0F, 25.0F);
+		CameraRotation = FRotator::ZeroRotator;
+	}
+	else
+	{
+		// The articulated fixed-camera lenses face local -Y and tilt about X.
+		CameraLocation = FVector(0.0F, -170.0F, 25.0F);
+		CameraRotation = FRotator(0.0F, -90.0F, 0.0F);
+	}
+	SensorCapture->SetRelativeLocation(CameraLocation);
+	SensorCapture->SetRelativeRotation(CameraRotation);
+	SensorViewCamera->SetRelativeLocation(CameraLocation);
+	SensorViewCamera->SetRelativeRotation(CameraRotation);
+
+	SensorRenderTarget = NewObject<UTextureRenderTarget2D>(this, TEXT("SensorRenderTarget"));
+	SensorRenderTarget->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
+	SensorRenderTarget->ClearColor = FLinearColor::Black;
+	SensorRenderTarget->bAutoGenerateMips = false;
+	SensorRenderTarget->InitAutoFormat(512, 288);
+	SensorRenderTarget->UpdateResourceImmediate(true);
+	SensorCapture->TextureTarget = SensorRenderTarget;
+}
+
+void AVirtualGimbalDevice::HandleMessage(
+	const uint64 ClientId, const FVirtualDeviceMessage& Message)
 {
 	bool bSucceeded = false;
 	switch (static_cast<EVirtualDeviceMessageType>(Message.MessageType))
@@ -177,7 +273,7 @@ void AVirtualGimbalDevice::HandleMessage(const FVirtualDeviceMessage& Message)
 		bSucceeded = Message.Payload.IsEmpty();
 		if (bSucceeded)
 		{
-			PublishTelemetry();
+			PublishTelemetryToClient(ClientId);
 		}
 		break;
 	case EVirtualDeviceMessageType::InjectFault:
@@ -198,14 +294,18 @@ void AVirtualGimbalDevice::HandleMessage(const FVirtualDeviceMessage& Message)
 					Message.Payload, 1, DelayMilliseconds)
 				&& (Mode != static_cast<uint8>(EVirtualDeviceResponseMode::Delayed)
 					|| DelayMilliseconds > 0);
-			SendAcknowledgeImmediately(Message.Sequence, Message.MessageType, bSucceeded);
+			SendAcknowledgeImmediately(
+				ClientId, Message.Sequence, Message.MessageType, bSucceeded);
 			if (bSucceeded)
 			{
-				ResponseMode = static_cast<EVirtualDeviceResponseMode>(Mode);
-				ResponseDelayMilliseconds = ResponseMode == EVirtualDeviceResponseMode::Delayed
-					? DelayMilliseconds : 0;
+				FClientResponseConfiguration& Configuration =
+					ClientResponseConfigurations.FindOrAdd(ClientId);
+				Configuration.Mode = static_cast<EVirtualDeviceResponseMode>(Mode);
+				Configuration.DelayMilliseconds =
+					Configuration.Mode == EVirtualDeviceResponseMode::Delayed
+						? DelayMilliseconds : 0;
 				UE_LOG(LogTemp, Display, TEXT("Response simulation mode=%u delay=%u ms."),
-					Mode, ResponseDelayMilliseconds);
+					Mode, Configuration.DelayMilliseconds);
 			}
 			return;
 		}
@@ -243,10 +343,22 @@ void AVirtualGimbalDevice::HandleMessage(const FVirtualDeviceMessage& Message)
 		bSucceeded = IsDroneMode() && bDroneAirborne;
 		if (bSucceeded) { DroneTargetLocation = FVector(0.0F, 0.0F, 1000.0F); }
 		break;
+	case EVirtualDeviceMessageType::SetCameraView:
+		bSucceeded = Message.Payload.Num() == 1 && Message.Payload[0] <= 1;
+		if (bSucceeded)
+		{
+			CameraViewRequestedDelegate.Broadcast(Message.Payload[0] != 0);
+		}
+		break;
 	default:
 		break;
 	}
-	SendAcknowledge(Message.Sequence, Message.MessageType, bSucceeded);
+	SendAcknowledge(ClientId, Message.Sequence, Message.MessageType, bSucceeded);
+}
+
+void AVirtualGimbalDevice::HandleClientDisconnected(const uint64 ClientId)
+{
+	ClientResponseConfigurations.Remove(ClientId);
 }
 
 bool AVirtualGimbalDevice::IsDroneMode() const
@@ -255,6 +367,7 @@ bool AVirtualGimbalDevice::IsDroneMode() const
 }
 
 void AVirtualGimbalDevice::SendAcknowledge(
+	const uint64 ClientId,
 	const uint32 Sequence,
 	const uint16 CommandType,
 	const bool bSucceeded)
@@ -264,10 +377,11 @@ void AVirtualGimbalDevice::SendAcknowledge(
 	Response.Sequence = Sequence;
 	VirtualDeviceProtocol::WriteUint16BigEndian(Response.Payload, CommandType);
 	Response.Payload.Add(bSucceeded ? 0 : 1);
-	SendResponse(MoveTemp(Response));
+	SendResponse(ClientId, MoveTemp(Response));
 }
 
 void AVirtualGimbalDevice::SendAcknowledgeImmediately(
+	const uint64 ClientId,
 	const uint32 Sequence,
 	const uint16 CommandType,
 	const bool bSucceeded)
@@ -277,40 +391,53 @@ void AVirtualGimbalDevice::SendAcknowledgeImmediately(
 	Response.Sequence = Sequence;
 	VirtualDeviceProtocol::WriteUint16BigEndian(Response.Payload, CommandType);
 	Response.Payload.Add(bSucceeded ? 0 : 1);
-	Network->SendMessage(Response);
+	Network->SendMessageToClient(ClientId, Response);
 }
 
-void AVirtualGimbalDevice::SendResponse(FVirtualDeviceMessage Message)
+void AVirtualGimbalDevice::SendResponse(
+	const uint64 ClientId, FVirtualDeviceMessage Message)
 {
-	if (ResponseMode == EVirtualDeviceResponseMode::NoResponse)
+	const FClientResponseConfiguration Configuration =
+		ClientResponseConfigurations.FindRef(ClientId);
+	if (Configuration.Mode == EVirtualDeviceResponseMode::NoResponse)
 	{
 		return;
 	}
-	if (ResponseMode == EVirtualDeviceResponseMode::Delayed)
+	if (Configuration.Mode == EVirtualDeviceResponseMode::Delayed)
 	{
 		FTimerHandle DelayedResponseTimer;
 		FTimerDelegate Delegate = FTimerDelegate::CreateWeakLambda(
 			this,
-			[this, Message = MoveTemp(Message)]() mutable
+			[this, ClientId, Message = MoveTemp(Message)]() mutable
 			{
-				if (ResponseMode != EVirtualDeviceResponseMode::NoResponse)
+				const FClientResponseConfiguration CurrentConfiguration =
+					ClientResponseConfigurations.FindRef(ClientId);
+				if (CurrentConfiguration.Mode != EVirtualDeviceResponseMode::NoResponse)
 				{
-					Network->SendMessage(Message);
+					Network->SendMessageToClient(ClientId, Message);
 				}
 			});
 		GetWorldTimerManager().SetTimer(
 			DelayedResponseTimer,
 			MoveTemp(Delegate),
-			ResponseDelayMilliseconds / 1000.0F,
+			Configuration.DelayMilliseconds / 1000.0F,
 			false);
 		return;
 	}
-	Network->SendMessage(Message);
+	Network->SendMessageToClient(ClientId, Message);
 }
 
 void AVirtualGimbalDevice::PublishTelemetry()
 {
-	if (!Network->IsClientConnected())
+	for (const uint64 ClientId : Network->ConnectedClientIds())
+	{
+		PublishTelemetryToClient(ClientId);
+	}
+}
+
+void AVirtualGimbalDevice::PublishTelemetryToClient(const uint64 ClientId)
+{
+	if (ClientId == 0)
 	{
 		return;
 	}
@@ -318,7 +445,7 @@ void AVirtualGimbalDevice::PublishTelemetry()
 	Telemetry.MessageType = static_cast<uint16>(EVirtualDeviceMessageType::Telemetry);
 	Telemetry.Sequence = TelemetrySequence++;
 	Telemetry.Payload = CreateTelemetryPayload();
-	SendResponse(MoveTemp(Telemetry));
+	SendResponse(ClientId, MoveTemp(Telemetry));
 }
 
 TArray<uint8> AVirtualGimbalDevice::CreateTelemetryPayload() const
@@ -358,11 +485,17 @@ void AVirtualGimbalDevice::UpdateVisualState()
 			YawDelta.RotateVector(FVector::YAxisVector));
 		const FQuat PitchDelta(PitchAxis, FMath::DegreesToRadians(Snapshot.TiltDegrees));
 		ApplyComponentSpaceRotation(*GimbalMesh, PitchBoneName, PitchDelta);
+
+		// Keep the camera proxy aligned with the animated skeletal sensor.
+		PanPivot->SetRelativeRotation(FRotator(0.0F, Snapshot.PanDegrees, 0.0F));
+		TiltPivot->SetRelativeRotation(FRotator(Snapshot.TiltDegrees, 0.0F, 0.0F));
 	}
 	else
 	{
+		// The imported articulated fixed-camera hinge runs along local X. Pan
+		// remains around vertical Z; only this model's tilt axis changes.
 		PanPivot->SetRelativeRotation(FRotator(0.0F, Snapshot.PanDegrees, 0.0F));
-		TiltPivot->SetRelativeRotation(FRotator(Snapshot.TiltDegrees, 0.0F, 0.0F));
+		TiltPivot->SetRelativeRotation(FRotator(0.0F, 0.0F, Snapshot.TiltDegrees));
 	}
 
 	FLinearColor StatusColor = FLinearColor::Red;

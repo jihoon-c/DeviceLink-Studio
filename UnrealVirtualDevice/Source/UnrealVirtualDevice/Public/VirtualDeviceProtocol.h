@@ -17,6 +17,7 @@ enum class EVirtualDeviceMessageType : uint16
 	DroneLand = 0x1011,
 	DroneMoveTo = 0x1012,
 	DroneReturnHome = 0x1013,
+	SetCameraView = 0x1014,
 	Acknowledge = 0x6001,
 	Telemetry = 0x7001,
 };

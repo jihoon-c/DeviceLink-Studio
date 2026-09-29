@@ -94,16 +94,16 @@ private:
 	bool CanAcceptMotionCommand() const;
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Limits")
-	float MinimumPanDegrees = -150.0F;
+	float MinimumPanDegrees = -170.0F;
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Limits")
-	float MaximumPanDegrees = 150.0F;
+	float MaximumPanDegrees = 170.0F;
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Limits")
-	float MinimumTiltDegrees = -60.0F;
+	float MinimumTiltDegrees = -45.0F;
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Limits")
-	float MaximumTiltDegrees = 120.0F;
+	float MaximumTiltDegrees = 80.0F;
 
 	UPROPERTY(EditAnywhere, Category="DeviceLink|Motion", meta=(ClampMin="1.0"))
 	float SlewRateDegreesPerSecond = 60.0F;
@@ -113,4 +113,5 @@ private:
 
 	FGimbalDeviceSnapshot Snapshot;
 	float ScanDirection = 1.0F;
+	bool bPowerEnabled = false;
 };

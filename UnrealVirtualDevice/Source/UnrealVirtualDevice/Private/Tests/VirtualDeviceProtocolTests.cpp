@@ -62,6 +62,12 @@ bool FVirtualDeviceFaultStateTest::RunTest(const FString& Parameters)
 	Device->InjectFault(EGimbalDeviceFault::None);
 	TestEqual(TEXT("Fault clear restores ready state"),
 		Device->GetSnapshot().State, EGimbalDeviceState::Ready);
+	TestTrue(TEXT("Power off succeeds"), Device->SetPower(false));
+	Device->InjectFault(EGimbalDeviceFault::MotorStall);
+	Device->InjectFault(EGimbalDeviceFault::None);
+	TestEqual(TEXT("Fault clear preserves offline state when power is off"),
+		Device->GetSnapshot().State, EGimbalDeviceState::Offline);
+	TestTrue(TEXT("Power on succeeds after offline fault clear"), Device->SetPower(true));
 	Device->InjectFault(EGimbalDeviceFault::SensorFailure);
 	TestEqual(TEXT("Sensor failure is published"),
 		Device->GetSnapshot().Fault, EGimbalDeviceFault::SensorFailure);
