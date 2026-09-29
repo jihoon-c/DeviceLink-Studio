@@ -3,6 +3,15 @@
 /out/
 /.vs/
 /.vscode/
+/UnrealVirtualDevice/.vs/
+/UnrealVirtualDevice/.vscode/
+/.codex/
+/.ppt-build/
+/artifacts/
+*.blend1
+*.pre-support-fix.blend
+/run-integration-demo.lnk
+/scenarios/*.report.*.md
 *.user
 *.suo
 *.VC.db
