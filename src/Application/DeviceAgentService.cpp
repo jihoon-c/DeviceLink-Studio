@@ -9,6 +9,12 @@ namespace DeviceLink::Application
 {
 namespace
 {
+std::int64_t UnixMillisecondsNow()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 constexpr std::uint16_t kSetPanTiltMessageType = 0x1003;
 constexpr std::uint16_t kInjectFaultMessageType = 0x1007;
 constexpr std::uint16_t kPowerMessageType = 0x1001;
@@ -216,7 +222,22 @@ AgentOperationResult DeviceAgentService::GetTelemetry(const std::chrono::millise
     {
         return {false, "Telemetry response timed out"};
     }
-    return {true, "Telemetry received", telemetry};
+    AgentOperationResult result{true, "Telemetry received", telemetry};
+    {
+        const std::scoped_lock lock(m_mutex);
+        result.telemetry = m_lastTelemetry;
+        result.observedAtUnixMilliseconds = m_lastTelemetryObservedAtUnixMilliseconds;
+    }
+    result.deviceId = m_deviceId;
+    return result;
+}
+
+std::vector<AgentEventSummary> DeviceAgentService::RecentEvents(
+    const std::size_t maximumEntryCount) const
+{
+    const std::scoped_lock lock(m_mutex);
+    const auto count = (std::min)(maximumEntryCount, m_recentEvents.size());
+    return {m_recentEvents.end() - count, m_recentEvents.end()};
 }
 
 AgentOperationResult DeviceAgentService::InjectFault(
@@ -323,6 +344,41 @@ void DeviceAgentService::ApplyDeviceEvent(const DeviceEvent& event)
     {
         return;
     }
+    AgentEventSummary summary{.timestampUnixMilliseconds = UnixMillisecondsNow()};
+    if (const auto* state = std::get_if<ConnectionStateChanged>(&event.payload))
+    {
+        summary.category = "connection-state";
+        summary.detail = std::string(ConnectionStateName(state->state));
+    }
+    else if (const auto* error = std::get_if<TransportError>(&event.payload))
+    {
+        summary.category = "transport-error";
+        summary.detail = error->message;
+    }
+    else if (const auto* receivedFrame = std::get_if<FrameReceived>(&event.payload))
+    {
+        summary.category = "frame-received";
+        summary.detail = "type=" + std::to_string(receivedFrame->frame.header.messageType) +
+            ";sequence=" + std::to_string(receivedFrame->frame.header.sequence);
+    }
+    else if (const auto* sentFrame = std::get_if<FrameSent>(&event.payload))
+    {
+        summary.category = "frame-sent";
+        summary.detail = "type=" + std::to_string(sentFrame->frame.header.messageType) +
+            ";sequence=" + std::to_string(sentFrame->frame.header.sequence);
+    }
+    else
+    {
+        summary.category = "telemetry-heartbeat";
+        summary.detail = "state-changed";
+    }
+    {
+        const std::scoped_lock lock(m_mutex);
+        m_recentEvents.push_back(std::move(summary));
+        constexpr std::size_t kMaximumEvents = 256;
+        if (m_recentEvents.size() > kMaximumEvents)
+            m_recentEvents.erase(m_recentEvents.begin());
+    }
     const auto* received = std::get_if<FrameReceived>(&event.payload);
     if (!received)
     {
@@ -345,6 +401,7 @@ void DeviceAgentService::ApplyDeviceEvent(const DeviceEvent& event)
     {
         const std::scoped_lock lock(m_mutex);
         m_lastTelemetry = telemetry;
+        m_lastTelemetryObservedAtUnixMilliseconds = UnixMillisecondsNow();
         ++m_telemetryRevision;
         changed = true;
     }

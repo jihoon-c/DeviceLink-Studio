@@ -1,8 +1,15 @@
 #include "DeviceLink/Application/DeviceAgentService.h"
 #include "DeviceLink/Application/DeviceManager.h"
+#include "DeviceLink/Application/DeviceRuntime.h"
+#include "DeviceLink/Application/EventLogQueryService.h"
+#include "DeviceLink/Infrastructure/SqliteEventRepository.h"
 #include "DeviceLink/Transport/TcpTransport.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <exception>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -14,6 +21,12 @@ namespace
 {
 using DeviceLink::Application::AgentOperationResult;
 using DeviceLink::Application::DeviceAgentService;
+
+std::int64_t UnixMillisecondsNow()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
 std::string EscapeJson(std::string_view text)
 {
@@ -50,6 +63,10 @@ std::string SerializeResult(const AgentOperationResult& result)
     output << std::boolalpha << std::setprecision(8)
            << "{\"ok\":" << result.succeeded
            << ",\"message\":\"" << EscapeJson(result.message) << '"';
+    if (!result.deviceId.empty())
+        output << ",\"device_id\":\"" << EscapeJson(result.deviceId) << '"';
+    if (result.observedAtUnixMilliseconds > 0)
+        output << ",\"observed_at_unix_ms\":" << result.observedAtUnixMilliseconds;
     if (result.telemetry)
     {
         const auto& telemetry = *result.telemetry;
@@ -88,7 +105,19 @@ std::chrono::milliseconds ReadTimeout(std::istringstream& input, const int fallb
 int main(int argc, char* argv[])
 {
     const std::string deviceId = argc > 1 ? argv[1] : "unreal-gimbal-01";
-    DeviceLink::Application::DeviceManager manager;
+    const char* configuredDatabase = std::getenv("DEVICELINK_AGENT_DB");
+    const std::filesystem::path databasePath = configuredDatabase != nullptr && *configuredDatabase != '\0'
+        ? std::filesystem::path(configuredDatabase)
+        : std::filesystem::path("DeviceLinkStudio.sqlite");
+    auto repository = std::make_unique<DeviceLink::Infrastructure::SqliteEventRepository>(databasePath);
+    const auto* reader = repository.get();
+    DeviceLink::Application::DeviceRuntime runtime(
+        std::move(repository),
+        {DeviceLink::Application::VirtualGimbalService::kTelemetryMessageType},
+        256, UnixMillisecondsNow);
+    DeviceLink::Application::EventLogQueryService eventQuery(
+        *reader, [&runtime] { runtime.FlushEventLog(); });
+    DeviceLink::Application::DeviceManager& manager = runtime.Devices();
     if (!manager.RegisterDevice(deviceId) ||
         !manager.AttachTransport(deviceId, std::make_unique<DeviceLink::Transport::TcpTransport>()))
     {
@@ -140,6 +169,66 @@ int main(int argc, char* argv[])
                 input >> timeoutMilliseconds >> tolerance;
                 result = agent.SetGimbalAngle(pan, tilt,
                     std::chrono::milliseconds((std::max)(1, timeoutMilliseconds)), tolerance);
+            }
+        }
+        else if (command == "GET_EVENTS")
+        {
+            int requestedCount = 20;
+            input >> requestedCount;
+            const auto count = static_cast<std::size_t>((std::clamp)(requestedCount, 1, 100));
+            const auto events = agent.RecentEvents(count);
+            std::ostringstream output;
+            output << "{\"ok\":true,\"device_id\":\"" << EscapeJson(deviceId)
+                   << "\",\"events\":[";
+            for (std::size_t index = 0; index < events.size(); ++index)
+            {
+                if (index != 0) output << ',';
+                output << "{\"timestamp_unix_ms\":" << events[index].timestampUnixMilliseconds
+                       << ",\"category\":\"" << EscapeJson(events[index].category)
+                       << "\",\"detail\":\"" << EscapeJson(events[index].detail) << "\"}";
+            }
+            output << "]}";
+            std::cout << output.str() << std::endl;
+            continue;
+        }
+        else if (command == "GET_HISTORY")
+        {
+            std::int64_t fromUnixMilliseconds{};
+            std::int64_t throughUnixMilliseconds{};
+            int requestedCount{};
+            if (!(input >> fromUnixMilliseconds >> throughUnixMilliseconds >> requestedCount) ||
+                fromUnixMilliseconds < 0 || throughUnixMilliseconds < fromUnixMilliseconds ||
+                requestedCount < 1 || requestedCount > 100)
+            {
+                result = {false, "GET_HISTORY requires valid from, through, and 1-100 count"};
+            }
+            else
+            {
+                try
+                {
+                    const auto entries = eventQuery.LoadWindow(deviceId, fromUnixMilliseconds,
+                        throughUnixMilliseconds, static_cast<std::size_t>(requestedCount));
+                    std::ostringstream output;
+                    output << "{\"ok\":true,\"device_id\":\"" << EscapeJson(deviceId)
+                           << "\",\"from_unix_ms\":" << fromUnixMilliseconds
+                           << ",\"through_unix_ms\":" << throughUnixMilliseconds
+                           << ",\"events\":[";
+                    for (std::size_t index = 0; index < entries.size(); ++index)
+                    {
+                        if (index != 0) output << ',';
+                        output << "{\"timestamp_unix_ms\":" << entries[index].timestampUnixMilliseconds
+                               << ",\"category\":\"" << EscapeJson(entries[index].category)
+                               << "\",\"detail\":\"" << EscapeJson(entries[index].detail)
+                               << "\",\"payload_byte_count\":" << entries[index].payloadByteCount << '}';
+                    }
+                    output << "]}";
+                    std::cout << output.str() << std::endl;
+                    continue;
+                }
+                catch (const std::exception& exception)
+                {
+                    result = {false, std::string("Event history query failed: ") + exception.what()};
+                }
             }
         }
         else if (command == "GET_TELEMETRY")

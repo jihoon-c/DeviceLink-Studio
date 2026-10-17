@@ -107,6 +107,7 @@ struct SqliteEventRepository::Impl final
             }
             throw std::runtime_error(message);
         }
+        sqlite3_busy_timeout(database, 2000);
 
         const char* createTable =
             "CREATE TABLE IF NOT EXISTS event_log ("
@@ -134,6 +135,18 @@ struct SqliteEventRepository::Impl final
         {
             const std::string message = errorMessage == nullptr ? "SQLite index creation failed" :
                 std::string("SQLite index creation failed: ") + errorMessage;
+            sqlite3_free(errorMessage);
+            sqlite3_close(database);
+            database = nullptr;
+            throw std::runtime_error(message);
+        }
+        if (sqlite3_exec(database,
+                "CREATE INDEX IF NOT EXISTS idx_event_log_device_time_id "
+                "ON event_log (device_id, timestamp_unix_ms, id);",
+                nullptr, nullptr, &errorMessage) != SQLITE_OK)
+        {
+            const std::string message = errorMessage == nullptr ? "SQLite time index creation failed" :
+                std::string("SQLite time index creation failed: ") + errorMessage;
             sqlite3_free(errorMessage);
             sqlite3_close(database);
             database = nullptr;
@@ -231,6 +244,40 @@ std::vector<EventLogEntry> SqliteEventRepository::ReadRecent(std::size_t maximum
         {
             ThrowSqliteError(m_impl->database, "SQLite recent event query failed");
         }
+        entries.push_back(ReadEventLogEntry(statement.Get()));
+    }
+}
+
+std::vector<EventLogEntry> SqliteEventRepository::ReadWindow(
+    const std::string& deviceId, const std::int64_t fromUnixMilliseconds,
+    const std::int64_t throughUnixMilliseconds, const std::size_t maximumEntryCount) const
+{
+    if (deviceId.empty() || fromUnixMilliseconds > throughUnixMilliseconds || maximumEntryCount == 0)
+    {
+        return {};
+    }
+    Statement statement(m_impl->database,
+        "SELECT timestamp_unix_ms, device_id, category, detail, payload FROM "
+        "(SELECT timestamp_unix_ms, device_id, category, detail, payload, id FROM event_log "
+        "WHERE device_id = ? AND timestamp_unix_ms >= ? AND timestamp_unix_ms <= ? "
+        "ORDER BY id DESC LIMIT ?) ORDER BY id;");
+    const auto count = (std::min)(maximumEntryCount, static_cast<std::size_t>(
+        (std::numeric_limits<std::int64_t>::max)()));
+    if (sqlite3_bind_text(statement.Get(), 1, deviceId.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_int64(statement.Get(), 2, fromUnixMilliseconds) != SQLITE_OK ||
+        sqlite3_bind_int64(statement.Get(), 3, throughUnixMilliseconds) != SQLITE_OK ||
+        sqlite3_bind_int64(statement.Get(), 4, static_cast<std::int64_t>(count)) != SQLITE_OK)
+    {
+        ThrowSqliteError(m_impl->database, "SQLite time-window query binding failed");
+    }
+    std::vector<EventLogEntry> entries;
+    while (true)
+    {
+        const int result = sqlite3_step(statement.Get());
+        if (result == SQLITE_DONE)
+            return entries;
+        if (result != SQLITE_ROW)
+            ThrowSqliteError(m_impl->database, "SQLite time-window query failed");
         entries.push_back(ReadEventLogEntry(statement.Get()));
     }
 }

@@ -24,6 +24,11 @@ public:
     [[nodiscard]] std::vector<EventLogEntry> ReadAll() const;
     [[nodiscard]] std::vector<EventLogEntry> ReadRecent(
         std::size_t maximumEntryCount) const override;
+    [[nodiscard]] std::vector<EventLogEntry> ReadWindow(
+        const std::string& deviceId,
+        std::int64_t fromUnixMilliseconds,
+        std::int64_t throughUnixMilliseconds,
+        std::size_t maximumEntryCount) const override;
     [[nodiscard]] std::vector<StoredFramePayload> ReadFramePayloads(
         const std::string& deviceId,
         const std::string& category = "frame-received") const;

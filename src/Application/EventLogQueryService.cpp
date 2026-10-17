@@ -35,6 +35,32 @@ std::vector<EventLogSummary> EventLogQueryService::LoadRecent(
     return LoadRecent(EventLogFilter{.maximumEntryCount = maximumEntryCount});
 }
 
+std::vector<EventLogSummary> EventLogQueryService::LoadWindow(
+    const std::string& deviceId, const std::int64_t fromUnixMilliseconds,
+    const std::int64_t throughUnixMilliseconds, const std::size_t maximumEntryCount) const
+{
+    if (deviceId.empty() || fromUnixMilliseconds > throughUnixMilliseconds ||
+        maximumEntryCount == 0 || maximumEntryCount > 100)
+    {
+        return {};
+    }
+    if (m_prepareRead)
+        m_prepareRead();
+    std::vector<EventLogSummary> summaries;
+    for (const auto& entry : m_eventLogReader.ReadWindow(
+            deviceId, fromUnixMilliseconds, throughUnixMilliseconds, maximumEntryCount))
+    {
+        summaries.push_back({
+            .timestampUnixMilliseconds = entry.timestampUnixMilliseconds,
+            .deviceId = entry.deviceId,
+            .category = entry.category,
+            .detail = entry.detail,
+            .payloadByteCount = entry.payload.size(),
+        });
+    }
+    return summaries;
+}
+
 std::vector<EventLogSummary> EventLogQueryService::LoadRecent(
     const EventLogFilter& filter) const
 {

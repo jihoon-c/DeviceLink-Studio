@@ -20,6 +20,15 @@ struct AgentOperationResult final
     std::string message;
     std::optional<VirtualGimbalTelemetry> telemetry;
     std::vector<std::string> steps;
+    std::string deviceId;
+    std::int64_t observedAtUnixMilliseconds{};
+};
+
+struct AgentEventSummary final
+{
+    std::int64_t timestampUnixMilliseconds{};
+    std::string category;
+    std::string detail;
 };
 
 class DeviceAgentService final
@@ -44,6 +53,8 @@ public:
         double toleranceDegrees = 0.5);
     [[nodiscard]] AgentOperationResult GetTelemetry(
         std::chrono::milliseconds timeout = std::chrono::seconds(2));
+    [[nodiscard]] std::vector<AgentEventSummary> RecentEvents(
+        std::size_t maximumEntryCount) const;
     [[nodiscard]] AgentOperationResult InjectFault(
         VirtualGimbalFault fault,
         std::chrono::milliseconds timeout = std::chrono::seconds(3));
@@ -77,6 +88,8 @@ private:
     std::condition_variable m_condition;
     std::optional<VirtualGimbalAcknowledgement> m_lastAcknowledgement;
     std::optional<VirtualGimbalTelemetry> m_lastTelemetry;
+    std::int64_t m_lastTelemetryObservedAtUnixMilliseconds{};
+    std::vector<AgentEventSummary> m_recentEvents;
     std::uint64_t m_acknowledgementRevision{};
     std::uint64_t m_telemetryRevision{};
     DeviceEventSubscription m_eventSubscription;

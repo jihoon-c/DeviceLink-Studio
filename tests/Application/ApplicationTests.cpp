@@ -776,6 +776,12 @@ void EventLogQueryServiceMapsRecentStorageEntries()
             "Event log filters or prepare callback differ");
     Require(filteredQuery.LoadRecent({.containsText = "missing", .maximumEntryCount = 20}).empty(),
             "Event log text filter returned a non-matching entry");
+    const auto window = filteredQuery.LoadWindow("query-device", 1500, 2500, 10);
+    Require(window.size() == 1 && window.front().timestampUnixMilliseconds == 2000 &&
+                window.front().payloadByteCount == 2,
+            "Event log time-window query leaked another device or timestamp");
+    Require(filteredQuery.LoadWindow("query-device", 2501, 3000, 10).empty(),
+            "Event log time-window query returned an out-of-range entry");
 }
 
 void CommunicationAlarmServiceTracksAndAcknowledgesTransportErrors()

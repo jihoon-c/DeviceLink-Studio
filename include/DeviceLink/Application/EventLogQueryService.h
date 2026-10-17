@@ -40,6 +40,11 @@ public:
         std::size_t maximumEntryCount) const;
     [[nodiscard]] std::vector<EventLogSummary> LoadRecent(
         const EventLogFilter& filter) const;
+    [[nodiscard]] std::vector<EventLogSummary> LoadWindow(
+        const std::string& deviceId,
+        std::int64_t fromUnixMilliseconds,
+        std::int64_t throughUnixMilliseconds,
+        std::size_t maximumEntryCount) const;
 
 private:
     const Infrastructure::IEventLogReader& m_eventLogReader;
