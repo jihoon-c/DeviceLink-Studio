@@ -36,3 +36,5 @@ Thumbs.db
 # Python generated output
 __pycache__/
 *.py[cod]
+/mcp_server/.venv/
+/mcp_server/llm.local.json

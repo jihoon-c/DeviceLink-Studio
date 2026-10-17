@@ -9,13 +9,23 @@ and transport implementations.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from typing import Any
+
+if __package__:
+    from .diagnostic_reports import DiagnosticReports
+    from .llm_diagnostics import explain as _langchain_explanation
+else:
+    from diagnostic_reports import DiagnosticReports
+    from llm_diagnostics import explain as _langchain_explanation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +104,52 @@ TOOLS = [
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     },
     {
+        "name": "get_recent_events",
+        "description": "Read a bounded history of this bridge session's device events without changing the device.",
+        "inputSchema": _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "get_event_history",
+        "description": "Read persisted device events for an inclusive Unix-millisecond time window, capped at 100 entries.",
+        "inputSchema": _schema({
+            "from_unix_ms": {"type": "integer", "minimum": 0},
+            "through_unix_ms": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+        }, ["from_unix_ms", "through_unix_ms"]),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "diagnose_device",
+        "description": "Collect fresh telemetry, persisted events and manual evidence; save a diagnostic report without changing device state.",
+        "inputSchema": _schema({
+            "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000},
+            "event_limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+        }),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "verify_recovery",
+        "description": "Request new telemetry and deterministically verify Ready state with no active fault.",
+        "inputSchema": _schema({"timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000}}),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "verify_diagnosis",
+        "description": "Compare a prior diagnosed fault with new telemetry and persisted events; append the observed transition to its report.",
+        "inputSchema": _schema({
+            "diagnosis_id": {"type": "string", "minLength": 1},
+            "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000},
+        }, ["diagnosis_id"]),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "get_diagnosis_report",
+        "description": "Read a saved diagnosis, its cited evidence and subsequent verification records, including after a server restart.",
+        "inputSchema": _schema({"diagnosis_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}}, ["diagnosis_id"]),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
         "name": "inject_fault",
         "description": "Inject a supported fault and verify the Fault state through telemetry.",
         "inputSchema": _schema(
@@ -155,13 +211,46 @@ DOCUMENTS = {
     "devicelink://manual/eo-ir": ROOT / "docs" / "agent" / "eo-ir-manual.md",
     "devicelink://manual/fault-codes": ROOT / "docs" / "agent" / "fault-codes.md",
 }
+MANUAL_DIR = ROOT / "docs" / "agent"
 
 
 class Bridge:
-    def __init__(self) -> None:
+    def __init__(self, report_directory: Path | None = None) -> None:
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._connected_endpoint: tuple[str, int] | None = None
+        self._diagnoses: dict[str, dict[str, Any]] = {}
+        self._reports = DiagnosticReports(report_directory or Path(os.environ.get(
+            "DEVICELINK_DIAGNOSTIC_REPORT_DIR", str(ROOT / "artifacts" / "diagnostics"))))
+
+    def record_diagnosis(self, device_id: str, observed_at: int,
+                         telemetry: dict[str, Any]) -> str:
+        diagnosis_id = uuid.uuid4().hex
+        if len(self._diagnoses) >= 100:
+            del self._diagnoses[next(iter(self._diagnoses))]
+        self._diagnoses[diagnosis_id] = {"device_id": device_id,
+                                         "observed_at_unix_ms": observed_at,
+                                         "telemetry": telemetry}
+        return diagnosis_id
+
+    def diagnosis(self, diagnosis_id: str) -> dict[str, Any] | None:
+        baseline = self._diagnoses.get(diagnosis_id)
+        if baseline is not None:
+            return baseline
+        record = self._reports.load(diagnosis_id)
+        return record["diagnosis"] if record else None
+
+    def save_report(self, result: dict[str, Any], *, verification: bool = False) -> dict[str, Any]:
+        try:
+            return self._reports.save(result, verification=verification)
+        except (OSError, ValueError):
+            return {"status": "unavailable", "error_code": "report_write_failed"}
+
+    def report(self, diagnosis_id: str) -> dict[str, Any]:
+        record = self._reports.load(diagnosis_id)
+        if record is None:
+            return {"ok": False, "message": "Diagnostic report was not found"}
+        return {"ok": True, "report": record}
 
     @property
     def connected_endpoint(self) -> tuple[str, int] | None:
@@ -173,6 +262,7 @@ class Bridge:
         candidates = [Path(configured)] if configured else []
         candidates.extend(
             [
+                ROOT / "build-agent-diag" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build-agent" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build" / "Release" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build" / "Debug" / "DeviceLinkAgentBridge.exe",
@@ -190,6 +280,10 @@ class Bridge:
     def call(self, line: str) -> dict[str, Any]:
         with self._lock:
             if self._process is None or self._process.poll() is not None:
+                if self._process is not None:
+                    for stream in (self._process.stdin, self._process.stdout):
+                        if stream is not None:
+                            stream.close()
                 executable = self._find_executable()
                 self._process = subprocess.Popen(
                     [str(executable)],
@@ -201,6 +295,7 @@ class Bridge:
                     bufsize=1,
                 )
                 self._connected_endpoint = None
+                self._diagnoses.clear()
             assert self._process.stdin is not None
             assert self._process.stdout is not None
             self._process.stdin.write(line + "\n")
@@ -215,24 +310,34 @@ class Bridge:
             elif not result.get("ok") and parts and parts[0] == "CONNECT":
                 self._process.terminate()
                 self._process.wait(timeout=2)
+                self._process.stdin.close()
+                self._process.stdout.close()
                 self._process = None
                 self._connected_endpoint = None
             return result
 
     def close(self) -> None:
         with self._lock:
-            if self._process is None or self._process.poll() is not None:
+            if self._process is None:
                 self._connected_endpoint = None
+                self._diagnoses.clear()
                 return
             try:
-                assert self._process.stdin is not None
-                self._process.stdin.write("QUIT\n")
-                self._process.stdin.flush()
-                self._process.wait(timeout=2)
+                if self._process.poll() is None:
+                    assert self._process.stdin is not None
+                    self._process.stdin.write("QUIT\n")
+                    self._process.stdin.flush()
+                    self._process.wait(timeout=2)
             except (BrokenPipeError, subprocess.TimeoutExpired):
                 self._process.terminate()
+                self._process.wait(timeout=2)
             finally:
+                for stream in (self._process.stdin, self._process.stdout):
+                    if stream is not None:
+                        stream.close()
+                self._process = None
                 self._connected_endpoint = None
+                self._diagnoses.clear()
 
 
 def _number(arguments: dict[str, Any], key: str) -> float:
@@ -250,22 +355,185 @@ def _integer(arguments: dict[str, Any], key: str, default: int) -> int:
 
 
 def _search_manual(query: str, limit: int) -> dict[str, Any]:
-    terms = {term.lower() for term in query.replace("/", " ").replace("_", " ").split() if len(term) > 1}
-    matches: list[tuple[int, dict[str, str]]] = []
-    for uri, path in DOCUMENTS.items():
-        text = path.read_text(encoding="utf-8")
-        sections = [section.strip() for section in text.split("\n## ") if section.strip()]
-        for section in sections:
-            lowered = section.lower()
+    terms = {term.lower() for term in re.findall(r"[A-Za-z0-9가-힣]+", query) if len(term) > 1}
+    matches: list[tuple[int, dict[str, Any]]] = []
+    errors: list[str] = []
+    for path in sorted(MANUAL_DIR.glob("*")):
+        if path.suffix.lower() not in {".md", ".pdf"} or not path.is_file():
+            continue
+        if path.stat().st_size > 20 * 1024 * 1024:
+            errors.append(f"{path.name}: manual exceeds 20 MiB limit")
+            continue
+        try:
+            content = path.read_bytes()
+        except OSError as exception:
+            errors.append(f"{path.name}: {type(exception).__name__}")
+            continue
+        version = hashlib.sha256(content).hexdigest()[:16]
+        uri = f"devicelink://manual/{path.name}"
+        chunks: list[tuple[str, int | None, str]] = []
+        if path.suffix.lower() == ".md":
+            try:
+                sections = re.split(r"(?=^## )", content.decode("utf-8"), flags=re.MULTILINE)
+            except UnicodeDecodeError:
+                errors.append(f"{path.name}: Markdown must be UTF-8")
+                continue
+            for section in sections:
+                section = section.strip()
+                if section:
+                    chunks.append((section.splitlines()[0].removeprefix("## "), None, section))
+        else:
+            try:
+                from io import BytesIO
+                from pypdf import PdfReader
+                pages = PdfReader(BytesIO(content)).pages
+                if len(pages) > 200:
+                    errors.append(f"{path.name}: PDF exceeds 200-page limit")
+                    continue
+                for page_number, page in enumerate(pages, start=1):
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        chunks.append((f"Page {page_number}", page_number, page_text.strip()))
+                if not chunks:
+                    errors.append(f"{path.name}: no extractable text; OCR is required")
+            except Exception as exception:
+                errors.append(f"{path.name}: {exception}")
+                continue
+        for section_name, page_number, chunk in chunks:
+            lowered = chunk.lower()
             score = sum(lowered.count(term) for term in terms)
             if score:
-                matches.append((score, {"source": uri, "excerpt": section[:900]}))
-    matches.sort(key=lambda item: item[0], reverse=True)
+                first_match = min(lowered.find(term) for term in terms if term in lowered)
+                excerpt_start = max(0, first_match - 150)
+                matches.append((score, {"source": uri, "document_version": version,
+                                        "section": section_name, "page": page_number,
+                                        "excerpt": chunk[excerpt_start:excerpt_start + 900]}))
+    matches.sort(key=lambda item: (-item[0], item[1]["source"], item[1]["page"] or 0))
+    selected = [item[1] for item in matches[:limit]]
+    for index, item in enumerate(selected, start=1):
+        item["citation_id"] = f"E{index}"
     return {
         "ok": bool(matches),
         "message": "Manual evidence found" if matches else "No matching manual section found",
-        "matches": [item[1] for item in matches[:limit]],
+        "matches": selected,
+        "errors": errors,
     }
+
+
+def _bounded_integer(arguments: dict[str, Any], key: str, default: int, minimum: int, maximum: int) -> int:
+    value = _integer(arguments, key, default)
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{key} must be between {minimum} and {maximum}")
+    return value
+
+
+def _fresh_telemetry(bridge: Bridge, timeout_ms: int) -> dict[str, Any]:
+    result = bridge.call(f"GET_TELEMETRY {timeout_ms}")
+    observed_at = result.get("observed_at_unix_ms")
+    if not result.get("ok") or not isinstance(result.get("telemetry"), dict) or not isinstance(observed_at, int):
+        return {"ok": False, "message": result.get("message", "Telemetry unavailable"), "raw": result}
+    age_ms = int(time.time() * 1000) - observed_at
+    if age_ms < -1000 or age_ms > timeout_ms + 1000:
+        return {"ok": False, "message": "Telemetry observation is stale", "age_ms": age_ms, "raw": result}
+    return {"ok": True, "age_ms": age_ms, "raw": result}
+
+
+def _diagnose_device(bridge: Bridge, timeout_ms: int, event_limit: int) -> dict[str, Any]:
+    observation = _fresh_telemetry(bridge, timeout_ms)
+    window_end = int(time.time() * 1000)
+    if observation["ok"]:
+        window_end = observation["raw"]["observed_at_unix_ms"] + 1000
+    window_start = window_end - 60000
+    events = bridge.call(f"GET_HISTORY {window_start} {window_end} {event_limit}")
+    event_status = "available" if events.get("ok") else "unavailable"
+    if not observation["ok"]:
+        return {"ok": True, "verdict": "INCONCLUSIVE", "message": observation["message"],
+                "observation": observation.get("raw"), "events": events.get("events", []),
+                "event_status": event_status, "event_window": [window_start, window_end],
+                "evidence_refs": []}
+    raw = observation["raw"]
+    telemetry = raw["telemetry"]
+    fault = telemetry.get("fault")
+    state = telemetry.get("state")
+    known_faults = {"MotorStall", "OverTemperature", "SensorFailure"}
+    if state == "Fault" and fault in known_faults:
+        manual = _search_manual(fault, 3)
+        hypothesis = fault
+        message = f"Observed {fault} in fresh telemetry; consult cited manual sections before recovery."
+    elif state == "Ready" and fault == "None":
+        manual = {"matches": []}
+        hypothesis = None
+        message = "Fresh telemetry reports Ready with no active fault."
+    else:
+        manual = _search_manual("telemetry recovery", 3)
+        hypothesis = None
+        message = "Current state does not identify a supported fault."
+    diagnosis_id = bridge.record_diagnosis(raw.get("device_id", ""),
+        raw["observed_at_unix_ms"], telemetry) if hypothesis else None
+    result = {"ok": True, "verdict": "OBSERVED" if hypothesis or (state == "Ready" and fault == "None") else "INCONCLUSIVE",
+            "diagnosis_id": diagnosis_id,
+            "message": message, "device_id": raw.get("device_id"),
+            "observed_at_unix_ms": raw["observed_at_unix_ms"], "telemetry_age_ms": observation["age_ms"],
+            "telemetry": telemetry, "events": events.get("events", []),
+            "event_status": event_status,
+            "event_window": [window_start, window_end],
+            "hypothesis": hypothesis, "evidence_refs": manual["matches"],
+            "llm_explanation": _langchain_explanation(telemetry, events.get("events", []), manual["matches"]),
+            "recommended_check": "Use verify_recovery after an explicitly requested recovery action" if hypothesis else None,
+            "actions_taken": []}
+    if diagnosis_id:
+        result["report"] = bridge.save_report(result)
+    return result
+
+
+def _verify_recovery(bridge: Bridge, timeout_ms: int) -> dict[str, Any]:
+    observation = _fresh_telemetry(bridge, timeout_ms)
+    if not observation["ok"]:
+        return {"ok": True, "verdict": "INCONCLUSIVE", "message": observation["message"],
+                "conditions": {"fresh_telemetry": False, "state_ready": False, "fault_none": False}}
+    raw = observation["raw"]
+    telemetry = raw["telemetry"]
+    conditions = {"fresh_telemetry": True, "state_ready": telemetry.get("state") == "Ready",
+                  "fault_none": telemetry.get("fault") == "None"}
+    return {"ok": True, "verdict": "PASS" if all(conditions.values()) else "FAIL",
+            "conditions": conditions, "device_id": raw.get("device_id"),
+            "observed_at_unix_ms": raw["observed_at_unix_ms"], "telemetry": telemetry,
+            "verification_scope": "current_state_only"}
+
+
+def _verify_diagnosis(bridge: Bridge, diagnosis_id: str, timeout_ms: int) -> dict[str, Any]:
+    baseline = bridge.diagnosis(diagnosis_id)
+    if baseline is None:
+        raise ValueError("Unknown diagnosis_id; no saved baseline is available")
+    observation = _fresh_telemetry(bridge, timeout_ms)
+    if not observation["ok"]:
+        result = {"ok": True, "diagnosis_id": diagnosis_id, "verdict": "INCONCLUSIVE",
+                "message": observation["message"], "baseline": baseline,
+                "verification_scope": "observed_state_transition"}
+        result["report"] = bridge.save_report(result, verification=True)
+        return result
+    raw = observation["raw"]
+    telemetry = raw["telemetry"]
+    baseline_time = baseline["observed_at_unix_ms"]
+    conditions = {
+        "same_device": raw.get("device_id") == baseline["device_id"],
+        "new_observation": raw["observed_at_unix_ms"] > baseline_time,
+        "state_ready": telemetry.get("state") == "Ready",
+        "fault_none": telemetry.get("fault") == "None",
+    }
+    if not conditions["same_device"] or not conditions["new_observation"]:
+        verdict = "INCONCLUSIVE"
+    else:
+        verdict = "PASS" if all(conditions.values()) else "FAIL"
+    history = bridge.call(f"GET_HISTORY {max(0, baseline_time - 5000)} "
+                          f"{raw['observed_at_unix_ms'] + 1000} 100")
+    result = {"ok": True, "diagnosis_id": diagnosis_id, "verdict": verdict,
+            "baseline": baseline, "verification": raw, "conditions": conditions,
+            "events": history.get("events", []),
+            "event_status": "available" if history.get("ok") else "unavailable",
+            "verification_scope": "observed_state_transition"}
+    result["report"] = bridge.save_report(result, verification=True)
+    return result
 
 
 def _contains_any(text: str, values: tuple[str, ...]) -> bool:
@@ -420,6 +688,32 @@ def call_tool(bridge: Bridge, name: str, arguments: dict[str, Any]) -> dict[str,
         return bridge.call(f"SET_ANGLE {pan} {tilt} {timeout} {tolerance}")
     if name == "get_telemetry":
         return bridge.call(f"GET_TELEMETRY {_integer(arguments, 'timeout_ms', 2000)}")
+    if name == "get_recent_events":
+        return bridge.call(f"GET_EVENTS {_bounded_integer(arguments, 'limit', 20, 1, 100)}")
+    if name == "get_event_history":
+        start = _bounded_integer(arguments, "from_unix_ms", 0, 0, 2**63 - 1)
+        end = _bounded_integer(arguments, "through_unix_ms", 0, 0, 2**63 - 1)
+        if end < start:
+            raise ValueError("through_unix_ms must be at or after from_unix_ms")
+        limit = _bounded_integer(arguments, "limit", 50, 1, 100)
+        return bridge.call(f"GET_HISTORY {start} {end} {limit}")
+    if name == "diagnose_device":
+        return _diagnose_device(bridge,
+            _bounded_integer(arguments, "timeout_ms", 2000, 1, 30000),
+            _bounded_integer(arguments, "event_limit", 20, 1, 100))
+    if name == "verify_recovery":
+        return _verify_recovery(bridge, _bounded_integer(arguments, "timeout_ms", 2000, 1, 30000))
+    if name == "verify_diagnosis":
+        diagnosis_id = arguments.get("diagnosis_id")
+        if not isinstance(diagnosis_id, str) or not diagnosis_id:
+            raise ValueError("diagnosis_id is required")
+        return _verify_diagnosis(bridge, diagnosis_id,
+                                 _bounded_integer(arguments, "timeout_ms", 2000, 1, 30000))
+    if name == "get_diagnosis_report":
+        diagnosis_id = arguments.get("diagnosis_id")
+        if not isinstance(diagnosis_id, str):
+            raise ValueError("diagnosis_id is required")
+        return bridge.report(diagnosis_id)
     if name == "inject_fault":
         fault = arguments.get("fault")
         if fault not in {"MotorStall", "OverTemperature", "SensorFailure"}:
@@ -438,7 +732,7 @@ def call_tool(bridge: Bridge, name: str, arguments: dict[str, Any]) -> dict[str,
         query = arguments.get("query")
         if not isinstance(query, str) or len(query.strip()) < 2:
             raise ValueError("query must contain at least two characters")
-        return _search_manual(query, _integer(arguments, "limit", 3))
+        return _search_manual(query, _bounded_integer(arguments, "limit", 3, 1, 5))
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -481,7 +775,7 @@ def handle(bridge: Bridge, request: dict[str, Any]) -> dict[str, Any] | None:
                     "isError": not data.get("ok", False),
                 },
             )
-        except (ValueError, FileNotFoundError, RuntimeError, json.JSONDecodeError) as exception:
+        except (ValueError, RuntimeError, OSError) as exception:
             data = {"ok": False, "message": str(exception)}
             return _result(
                 request_id,
@@ -507,6 +801,9 @@ def handle(bridge: Bridge, request: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> int:
+    # MCP stdio is UTF-8 even when Windows redirects pipes using a legacy locale.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     bridge = Bridge()
     try:
         for line in sys.stdin:
