@@ -33,22 +33,23 @@ Visual Studio Developer PowerShell 또는 Developer Command Prompt에서 실행�
 
 ```powershell
 cd F:\GitHubRep\DeviceLinkStudio
-cmake -S . -B build-agent -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-agent --target DeviceLinkAgentBridge
+cmake -S . -B build-agent-diag -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-agent-diag --target DeviceLinkAgentBridge
 ```
 
 빌드 결과:
 
 ```text
-F:\GitHubRep\DeviceLinkStudio\build-agent\DeviceLinkAgentBridge.exe
+F:\GitHubRep\DeviceLinkStudio\build-agent-diag\DeviceLinkAgentBridge.exe
 ```
 
 전체 테스트:
 
 ```powershell
-cmake --build build-agent
-ctest --test-dir build-agent --output-on-failure
-python -m unittest tests\DeviceAgentMcpTests.py -v
+cmake --build build-agent-diag
+ctest --test-dir build-agent-diag --output-on-failure
+$env:DEVICELINK_AGENT_BRIDGE = "F:\GitHubRep\DeviceLinkStudio\build-agent-diag\DeviceLinkAgentBridge.exe"
+.\mcp_server\.venv\Scripts\python.exe -m unittest tests.DeviceAgentMcpTests -v
 ```
 
 ## 2. Codex에 MCP 서버 등록
@@ -64,22 +65,24 @@ Codex 데스크톱에서 다음 순서로 등록합니다.
 7. 환경 변수 추가:
 
 ```text
-DEVICELINK_AGENT_BRIDGE=F:\GitHubRep\DeviceLinkStudio\build-agent\DeviceLinkAgentBridge.exe
+DEVICELINK_AGENT_BRIDGE=F:\GitHubRep\DeviceLinkStudio\build-agent-diag\DeviceLinkAgentBridge.exe
 ```
 
 8. 저장 후 Codex를 재시작합니다.
 9. 새 작업에서 `/mcp`를 입력해 `devicelink` 연결을 확인합니다.
 
-동일 설정을 `config.toml`에 직접 추가하려면 다음 예시를 사용합니다. Python 경로는 `where python` 결과에 맞게 바꿉니다.
+이 PC의 현재 Codex 설정은 `mcp_server/.venv/Scripts/python.exe`와 `build-agent-diag/DeviceLinkAgentBridge.exe`를 사용한다. 설정 파일을 바꾼 뒤 이미 실행 중인 MCP 프로세스는 이전 도구 목록을 유지할 수 있으므로 Codex를 재시작하고 `diagnose_device`, `get_event_history`, `verify_diagnosis`가 목록에 나타나는지 확인한다.
+
+동일 설정을 `config.toml`에 직접 추가하려면 다음 예시를 사용합니다.
 
 ```toml
 [mcp_servers.devicelink]
-command = "python"
+command = "F:\\GitHubRep\\DeviceLinkStudio\\mcp_server\\.venv\\Scripts\\python.exe"
 args = ["F:\\GitHubRep\\DeviceLinkStudio\\mcp_server\\server.py"]
 cwd = "F:\\GitHubRep\\DeviceLinkStudio"
 startup_timeout_sec = 10
 tool_timeout_sec = 45
-env = { DEVICELINK_AGENT_BRIDGE = "F:\\GitHubRep\\DeviceLinkStudio\\build-agent\\DeviceLinkAgentBridge.exe" }
+env = { DEVICELINK_AGENT_BRIDGE = "F:\\GitHubRep\\DeviceLinkStudio\\build-agent-diag\\DeviceLinkAgentBridge.exe" }
 ```
 
 ## 3. Unreal 가상장비 실행
@@ -174,6 +177,14 @@ run_test_scenario(scenario="motor_stall_recovery")
 
 ## 7. 매뉴얼 RAG
 
+현재 `search_manual`은 `docs/agent`의 Markdown 절과 PDF 페이지를 단어 빈도로 검색한다. 결과에는 문서 내용 해시, 절 또는 페이지, 인용 ID가 포함된다. 이미지로만 구성된 PDF의 OCR, 임베딩·벡터 검색은 [AI 진단 에이전트 기획](AI_DIAGNOSTIC_AGENT_PLAN_KR.md)의 후속 범위다.
+
+현재 사용할 수 있는 읽기 전용 진단 도구는 `get_recent_events`(현 브리지 세션 이벤트), `get_event_history`(SQLite의 장비 ID·시간 범위 이력), `diagnose_device`(새 Telemetry·영속 이벤트·매뉴얼 근거 묶음), `verify_recovery`(새 Telemetry의 Ready/None 조건 확인)다. `verify_recovery`의 PASS는 조회한 현재 상태에만 적용된다. 진단 도구는 fault 해제나 장비 제어를 자동 실행하지 않는다.
+
+PDF 검색과 선택적 LLM 설명을 사용하려면 MCP 서버 Python 환경에 `python -m pip install -r mcp_server/requirements-diagnostics.txt`를 실행한다. 현재 로컬 구성은 Ollama + `qwen3:4b`이며 `mcp_server/llm.local.json`에서 모델과 루프백 주소를 읽는다. 외부 API 키를 사용하지 않는다. 최초 준비와 재부팅 후 실행은 [로컬 LLM 안내](LOCAL_LLM_SETUP_KR.md)를 따른다. 모델을 설정하지 않으면 관측·검색 결과만 반환한다. `DEVICELINK_AGENT_DB`를 지정하면 브리지 SQLite 경로를 바꿀 수 있고, 기본값은 작업 디렉터리의 `DeviceLinkStudio.sqlite`다. 모델 설명은 제안으로만 기록되며 판정값을 바꾸지 않는다.
+
+고장 진단 시 `diagnose_device`가 `diagnosis_id`를 반환한다. 사용자가 복구 명령을 실행한 후 `verify_diagnosis(diagnosis_id=...)`를 호출하면 최초 Fault 관측과 나중의 Ready/None Telemetry, 그 사이 영속 이벤트를 함께 반환한다. PASS는 같은 장비에서 더 늦은 정상 상태가 **관측되었다**는 뜻이며 특정 복구 명령이 원인이었다고 단정하지 않는다. 진단과 검증은 `artifacts/diagnostics`에 JSON·Markdown으로 저장한다. `get_diagnosis_report`로 저장된 근거와 결과를 조회할 수 있고, 같은 보고서 폴더를 사용하면 서버 재시작 후에도 진단 ID로 재검증할 수 있다.
+
 질문:
 
 ```text
@@ -251,7 +262,7 @@ DeviceLink> MotorStall을 주입하고 복구 시험해줘
 ### DeviceLinkAgentBridge.exe를 찾을 수 없음
 
 ```powershell
-cmake --build build-agent --target DeviceLinkAgentBridge
+cmake --build build-agent-diag --target DeviceLinkAgentBridge
 ```
 
 `DEVICELINK_AGENT_BRIDGE`가 실제 exe 절대 경로인지 확인합니다.
