@@ -12,6 +12,10 @@ Ollama 휴대용 런타임과 `qwen3:4b`를 사용한다. 모델은 이 PC에서
 
 `llm.local.json`은 매 진단 시 읽으므로 모델명 변경에는 MCP 재시작이 필요 없다. Python 코드나 MCP 도구 목록을 변경한 뒤에는 Codex를 재시작한다.
 
+## 시범운영 EXE
+
+프로젝트 루트의 `DeviceLinkDemo.exe`는 운영 창과 로컬 모델·Unreal 가상장비·MFC 관제를 함께 준비한다. 최초 환경 준비 후 `scripts/Build-DemoLauncher.ps1`로 생성한다. [README의 시범운영 사용 순서](../README.md#exe-하나로-시범운영)를 따른다. 운영 창의 LLM 진단은 기존 C++ 브리지를 사용하며 Codex 연결 없이도 실행된다. 시연 설정과 이력은 `artifacts/demo/`, 보고서는 그 아래 `reports/`에 저장한다.
+
 ## 준비 및 실행
 
 프로젝트 루트의 PowerShell에서 실행한다. 최초 실행은 공식 Ollama 배포 ZIP과 로컬 모델을 다운로드한다. ZIP은 GitHub 공식 릴리스의 SHA-256과 비교한 후 압축을 해제한다. 관리자 설치나 Windows 자동 시작 등록은 수행하지 않는다.
@@ -33,7 +37,7 @@ PC 재부팅 등으로 Ollama가 종료된 경우 이미 다운로드한 모델�
   "provider": "local",
   "model": "qwen3:4b",
   "base_url": "http://127.0.0.1:11434/v1",
-  "timeout_seconds": 20
+  "timeout_seconds": 120
 }
 ```
 
@@ -61,6 +65,8 @@ PC 재부팅 등으로 Ollama가 종료된 경우 이미 다운로드한 모델�
 현재 검색은 Markdown 절·텍스트 PDF 페이지의 키워드 검색이다. 긴 절에서는 검색어 주변을 발췌한다. 텍스트가 추출되지 않는 PDF는 OCR 필요 상태를 표시한다. 실제 제조사 PDF/OCR·임베딩 검색 품질은 아직 검증 범위가 아니다.
 
 ## 진단 및 보고서
+
+`diagnose_device`는 기본적으로 모델을 호출하지 않는다. `include_llm=true`를 지정할 때만 아래 LLM 설명 단계를 수행한다. 기본 진단의 관측·매뉴얼 근거·보고서·복구 검증에는 모델 서버가 필요하지 않다.
 
 1. `diagnose_device`는 네이티브 Application API의 새 Telemetry와 SQLite 이벤트를 읽는다.
 2. 관련 매뉴얼을 검색하고 로컬 LLM이 인용과 절차를 선택한다. LLM에는 장비 제어 도구를 제공하지 않는다.
