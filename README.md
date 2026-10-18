@@ -15,6 +15,29 @@
 
 UI는 Application 서비스를 사용하고, worker 결과는 이벤트 큐와 `PostMessage`를 거쳐 UI 스레드에 전달합니다. Protocol은 패킷을 해석하고 Transport는 원시 바이트만 전송합니다.
 
+## 구조도
+
+주요 호출·데이터 흐름입니다. MFC와 C++ 브리지는 같은 Application 라이브러리를 사용하며, 각각의 실행 프로세스에서 장비에 연결합니다.
+
+```mermaid
+flowchart LR
+    MFC["MFC UI<br/>탭 · 자연어 요청 패널"] --> APP["C++ Application<br/>제어 · 상태 확인 · 자동 시험"]
+    PY["Python 운영 창 / MCP"] --> BRIDGE["C++ Agent Bridge"]
+    BRIDGE --> APP
+    APP --> CORE["Core<br/>세션 · 연결 상태"]
+    CORE --> PROTOCOL["Protocol<br/>프레이밍 · 파싱 · CRC16"]
+    CORE --> TRANSPORT["Transport<br/>TCP 원시 바이트 송수신"]
+    TRANSPORT <-->|"명령 · ACK · Telemetry"| UE["Unreal 가상장비<br/>짐벌 · 고장 재현"]
+    APP --> INFRA["Infrastructure<br/>SQLite · 파일 로그"]
+    PY --> DIAG["규칙 기반 진단<br/>관측 · 매뉴얼 근거"]
+    DIAG --> BRIDGE
+    DIAG --> MANUAL["샘플 매뉴얼<br/>Markdown / PDF"]
+    DIAG -.->|"선택적 설명"| LLM["Ollama / Qwen3 4B"]
+    DIAG --> REPORT["진단·검증 보고서<br/>JSON / Markdown"]
+```
+
+MFC 요청 패널은 현재 제어·관측 진단까지 연결되어 있습니다. Python의 매뉴얼·LLM·보고서 기능을 MFC에 연결하는 작업은 진행 중입니다.
+
 ## 실행
 
 준비된 이 PC에서는 프로젝트 루트의 **`DeviceLinkDemo.exe`**를 실행합니다. 운영 창이 로컬 LLM·Unreal 가상장비·MFC를 준비하고 장비에 자동 연결합니다.
@@ -23,6 +46,60 @@ UI는 Application 서비스를 사용하고, worker 결과는 이벤트 큐와 `
 2. MFC에서 장비를 조작하거나 `현재 상태 확인`, `Pan 30 Tilt -10`을 입력해 **미리보기 → 실행**합니다.
 3. 운영 창의 `MotorStall 고장 시연`으로 AI 진단과 복구 전후 FAIL→PASS를 확인합니다.
 4. 종료는 운영 창의 `시범운영 종료`를 사용합니다.
+
+### 작업 절차 시퀀스
+
+준비·자연어 운용·고장 시연의 성공 경로입니다. 운영 창은 브리지를 통해, MFC는 프로세스 내부에서 Application을 호출합니다. 장비 명령·조회는 Protocol·Transport를 거칩니다.
+
+```mermaid
+sequenceDiagram
+    actor User as 사용자
+    participant Launcher as EXE / Python 운영 창
+    participant MFC as MFC 콘솔
+    participant Native as C++ Application
+    participant UE as Unreal 가상장비
+    participant Diag as Python 진단·검증
+    participant LLM as 로컬 LLM
+    participant Files as 보고서 파일
+
+    User->>Launcher: DeviceLinkDemo.exe 실행
+    Launcher->>LLM: 서버 시작·재사용 및 모델 준비
+    Launcher->>UE: 가상장비 시작·재사용
+    Launcher->>Native: 연결 → 첫 Telemetry 대기 → 전원·초기화
+    Native->>UE: 명령 전송 및 상태 요청
+    UE-->>Native: Ready / 고장 없음
+    Native-->>Launcher: 준비 확인
+    Launcher->>MFC: 콘솔 실행 및 자동 연결
+    User->>MFC: Pan 30 Tilt -10 입력 및 미리보기
+    MFC-->>User: Application이 해석한 실행 계획 표시
+    User->>MFC: 실행
+    MFC->>Native: 계획 재검증 및 worker 실행
+    Native->>UE: 각도 명령 전송
+    UE-->>Native: ACK·실제 각도 Telemetry
+    Native-->>MFC: 결과 큐 → PostMessage → 도달 상태 표시
+
+    User->>Launcher: MotorStall 고장 시연
+    Launcher->>Native: 고장 주입
+    Native->>UE: MotorStall 설정 및 관측 확인
+    Launcher->>Diag: diagnose_device(include_llm=true)
+    Diag->>Native: 새 Telemetry·이벤트 조회
+    Native-->>Diag: 관측된 Fault / MotorStall
+    Diag->>Diag: 매뉴얼 근거 검색
+    Diag->>LLM: 근거 내 확인·복구 절차 선택 요청
+    LLM-->>Diag: 인용이 포함된 제안
+    Diag->>Files: 진단 보고서 저장
+    Diag-->>Launcher: 진단 ID·근거·제안
+    Launcher->>Diag: 복구 전 새 Telemetry로 검증
+    Diag-->>Launcher: FAIL
+    Launcher->>Native: 가상 고장 해제
+    Native->>UE: 고장 해제 및 상태 확인
+    Launcher->>Diag: 동일 진단 ID로 새 Telemetry 검증
+    Diag->>Files: 검증 결과 추가 저장
+    Diag-->>Launcher: PASS — 더 늦은 Ready / 고장 없음 관측
+    Launcher-->>User: FAIL → PASS 및 보고서 경로
+    User->>Launcher: 시범운영 종료
+    Launcher->>Launcher: 직접 시작한 프로세스·하위 프로세스 정리
+```
 
 3D 화면은 운영 창에서 선택하며 선택값을 저장합니다. 로그·시연 이력·보고서는 `artifacts/demo/`에 기록합니다. **EXE는 프로젝트의 모델·Python·Unreal·빌드 결과를 사용하는 런처이므로 단독 배포본이 아닙니다.**
 
