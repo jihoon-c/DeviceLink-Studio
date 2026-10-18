@@ -101,6 +101,7 @@ add_library(DeviceLinkApplication STATIC
     src/Application/FrameReplayRunner.cpp
     src/Application/GimbalProtocolAdapter.cpp
     src/Application/OperatorWorkflowService.cpp
+    src/Application/OperatorRequestService.cpp
     src/Application/OperatorSettingsService.cpp
     src/Application/ScenarioRunner.cpp
     src/Application/ScenarioTextCodec.cpp
@@ -120,7 +121,7 @@ target_compile_features(DeviceLinkApplication PUBLIC cxx_std_20)
 target_link_libraries(DeviceLinkApplication PRIVATE DeviceLinkCore DeviceLinkInfrastructure)
 
 if(MSVC)
-    target_compile_options(DeviceLinkApplication PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(DeviceLinkApplication PRIVATE /W4 /permissive- /EHsc /utf-8)
 endif()
 
 add_library(DeviceLinkUI STATIC
@@ -143,6 +144,17 @@ if(MSVC)
 endif()
 
 option(DEVICELINK_BUILD_MFC_INTEGRATION "Build the MFC dashboard integration library" OFF)
+add_executable(DeviceLinkDemo WIN32 src/DemoLauncher/DemoLauncherMain.cpp)
+target_compile_features(DeviceLinkDemo PRIVATE cxx_std_20)
+target_compile_definitions(DeviceLinkDemo PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(DeviceLinkDemo PRIVATE user32)
+if(MSVC)
+    target_compile_options(DeviceLinkDemo PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET DeviceLinkDemo PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_custom_command(TARGET DeviceLinkDemo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:DeviceLinkDemo> ${CMAKE_CURRENT_SOURCE_DIR}/DeviceLinkDemo.exe)
+
 option(DEVICELINK_BUILD_MFC_HOST "Build the standalone MFC dashboard host example" OFF)
 
 if(DEVICELINK_BUILD_MFC_HOST)
@@ -175,7 +187,7 @@ if(DEVICELINK_BUILD_MFC_HOST)
     )
     target_compile_features(DeviceLinkMfcHost PRIVATE cxx_std_20)
     target_compile_definitions(DeviceLinkMfcHost PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _AFXDLL UNICODE _UNICODE)
-    target_link_libraries(DeviceLinkMfcHost PRIVATE DeviceLinkMfcIntegration DeviceLinkApplication DeviceLinkInfrastructure DeviceLinkTransport user32)
+    target_link_libraries(DeviceLinkMfcHost PRIVATE DeviceLinkMfcIntegration DeviceLinkApplication DeviceLinkInfrastructure DeviceLinkTransport user32 comctl32)
 
     if(MSVC)
         target_compile_options(DeviceLinkMfcHost PRIVATE /W4 /permissive- /EHsc)
@@ -219,6 +231,14 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING)
+    add_executable(OperatorRequestTests tests/Application/OperatorRequestTests.cpp)
+    target_compile_features(OperatorRequestTests PRIVATE cxx_std_20)
+    target_link_libraries(OperatorRequestTests PRIVATE DeviceLinkApplication)
+    if(MSVC)
+        target_compile_options(OperatorRequestTests PRIVATE /W4 /permissive- /EHsc /utf-8)
+    endif()
+    add_test(NAME OperatorRequestTests COMMAND OperatorRequestTests)
+
     add_executable(TcpTransportTests
         tests/Transport/TcpTransportTests.cpp
     )

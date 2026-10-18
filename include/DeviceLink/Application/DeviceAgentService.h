@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,6 +36,7 @@ class DeviceAgentService final
 {
 public:
     DeviceAgentService(DeviceManager& manager, std::string deviceId);
+    DeviceAgentService(DeviceManager& manager, VirtualGimbalService& gimbal);
     ~DeviceAgentService();
 
     DeviceAgentService(const DeviceAgentService&) = delete;
@@ -83,7 +85,8 @@ private:
 
     DeviceManager& m_manager;
     std::string m_deviceId;
-    VirtualGimbalService m_gimbal;
+    std::unique_ptr<VirtualGimbalService> m_ownedGimbal;
+    VirtualGimbalService& m_gimbal;
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     std::optional<VirtualGimbalAcknowledgement> m_lastAcknowledgement;

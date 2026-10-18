@@ -69,7 +69,7 @@ $warmup = @{model=$Model; prompt=''; keep_alive='10m'; options=@{num_ctx=8192}} 
 $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/generate' -Method Post -Body $warmup `
     -ContentType 'application/json' -NoProxy -TimeoutSec 120
 
-$configuration = @{provider='local'; model=$Model; base_url='http://127.0.0.1:11434/v1'; timeout_seconds=20}
+$configuration = @{provider='local'; model=$Model; base_url='http://127.0.0.1:11434/v1'; timeout_seconds=120}
 $configuration | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'mcp_server\llm.local.json') -Encoding utf8
 Write-Output "Local LLM configured: $Model at http://127.0.0.1:11434/v1"
 Write-Output 'No cloud key is used. Run mcp_server/.venv/Scripts/python.exe mcp_server/check_diagnostics.py --live.'

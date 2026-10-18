@@ -11,6 +11,7 @@
 *.blend1
 *.pre-support-fix.blend
 /run-integration-demo.lnk
+/DeviceLinkDemo.exe
 /scenarios/*.report.*.md
 *.user
 *.suo

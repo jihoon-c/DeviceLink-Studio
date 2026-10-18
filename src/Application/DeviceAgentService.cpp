@@ -50,7 +50,15 @@ std::chrono::milliseconds RemainingUntil(
 DeviceAgentService::DeviceAgentService(DeviceManager& manager, std::string deviceId)
     : m_manager(manager),
       m_deviceId(std::move(deviceId)),
-      m_gimbal(manager, m_deviceId, ReconnectPolicy{.enabled = false})
+      m_ownedGimbal(std::make_unique<VirtualGimbalService>(manager, m_deviceId, ReconnectPolicy{.enabled = false})),
+      m_gimbal(*m_ownedGimbal)
+{
+    m_eventSubscription = m_manager.SubscribeToEvents(
+        [this](const DeviceEvent& event) { ApplyDeviceEvent(event); });
+}
+
+DeviceAgentService::DeviceAgentService(DeviceManager& manager, VirtualGimbalService& gimbal)
+    : m_manager(manager), m_deviceId(gimbal.DeviceId()), m_gimbal(gimbal)
 {
     m_eventSubscription = m_manager.SubscribeToEvents(
         [this](const DeviceEvent& event) { ApplyDeviceEvent(event); });

@@ -205,6 +205,12 @@ BEGIN_MESSAGE_MAP(MfcDashboardFrame, CFrameWnd)
         &MfcDashboardFrame::OnToggleCameraView)
     ON_MESSAGE(WM_APP + 101, &MfcDashboardFrame::OnDeviceEvent)
     ON_MESSAGE(WM_APP + 102, &MfcDashboardFrame::OnWorkflowProgress)
+    ON_MESSAGE(WM_APP + 103, &MfcDashboardFrame::OnRequestProgress)
+    ON_NOTIFY(TCN_SELCHANGE, MfcDashboardFrame::WorkspaceTabId, &MfcDashboardFrame::OnWorkspaceChanged)
+    ON_BN_CLICKED(MfcDashboardFrame::PreviewRequestButtonId, &MfcDashboardFrame::OnPreviewRequest)
+    ON_BN_CLICKED(MfcDashboardFrame::ExecuteRequestButtonId, &MfcDashboardFrame::OnExecuteRequest)
+    ON_BN_CLICKED(MfcDashboardFrame::CancelRequestButtonId, &MfcDashboardFrame::OnCancelRequest)
+    ON_BN_CLICKED(MfcDashboardFrame::DiagnoseRequestButtonId, &MfcDashboardFrame::OnDiagnoseRequest)
 END_MESSAGE_MAP()
 
 MfcDashboardFrame::MfcDashboardFrame(
@@ -212,12 +218,13 @@ MfcDashboardFrame::MfcDashboardFrame(
     Application::VirtualGimbalService& gimbalService,
     Application::OperatorWorkflowService& workflowService,
     Application::EventLogQueryService& eventLogQueryService,
-    Application::OperatorSettingsService& settingsService) noexcept
+    Application::OperatorSettingsService& settingsService,
+    Application::OperatorRequestService& requestService) noexcept
     : m_runtime(runtime),
       m_gimbalService(gimbalService),
       m_workflowService(workflowService),
       m_eventLogQueryService(eventLogQueryService),
-      m_settingsService(settingsService)
+      m_settingsService(settingsService), m_requestService(requestService)
 {
 }
 
@@ -232,7 +239,7 @@ MfcDashboardFrame::~MfcDashboardFrame()
 bool MfcDashboardFrame::CreateDashboard()
 {
     const UINT dpi = ::GetDpiForSystem();
-    RECT windowRect{0, 0, ::MulDiv(1100, dpi, 96), ::MulDiv(900, dpi, 96)};
+    RECT windowRect{0, 0, ::MulDiv(1280, dpi, 96), ::MulDiv(780, dpi, 96)};
     constexpr DWORD style = WS_OVERLAPPEDWINDOW;
     ::AdjustWindowRectExForDpi(&windowRect, style, FALSE, 0, dpi);
     return Create(nullptr, L"DeviceLink Studio - Unreal Virtual Gimbal",
@@ -268,6 +275,7 @@ int MfcDashboardFrame::OnCreate(LPCREATESTRUCT createStructure)
             ::PostMessageW(window, kWorkflowProgressMessage, 0, 0);
         }
     });
+    m_requestService.SetWakeupHandler([window] { ::PostMessageW(window, WM_APP + 103, 0, 0); });
     RefreshDashboardViews();
     RefreshEventHistory();
     return 0;
@@ -378,6 +386,25 @@ bool MfcDashboardFrame::CreateControls()
     {
         return false;
     }
+    if (!m_workspaceTabs.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP, CRect(0, 0, 10, 10), this, WorkspaceTabId) ||
+        !m_requestEdit.Create(editStyle | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP,
+            CRect(0, 0, 10, 10), this, 2502) ||
+        !m_requestOutput.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
+            CRect(0, 0, 10, 10), this, 2503) ||
+        !m_requestHelp.Create(L"예: 현재 상태 확인 / 고장 진단 / Pan 30 Tilt -10\n미리보기 후 실행하세요. 연결은 상단 버튼을 사용합니다.", WS_CHILD | WS_VISIBLE,
+            CRect(0, 0, 10, 10), this) ||
+        !m_previewRequestButton.Create(L"미리보기", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, PreviewRequestButtonId) ||
+        !m_executeRequestButton.Create(L"실행", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, ExecuteRequestButtonId) ||
+        !m_cancelRequestButton.Create(L"요청 중지", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, CancelRequestButtonId) ||
+        !m_diagnoseRequestButton.Create(L"현재 상태 진단", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, DiagnoseRequestButtonId)) return false;
+    m_workspaceTabs.InsertItem(0, L"운용");
+    m_workspaceTabs.InsertItem(1, L"시험 / 설정");
+    m_workspaceTabs.InsertItem(2, L"이력 / 패킷");
+    m_workspaceTabs.SetCurSel(0);
+    m_requestEdit.SetLimitText(1024);
+    m_requestEdit.SetWindowText(L"현재 상태 확인");
+    m_requestOutput.SetLimitText(50000);
+    m_requestOutput.SetWindowText(L"규칙 기반 관측 진단 · LLM 미사용\r\n\r\n자연어 요청은 같은 장비 연결과 Application 서비스를 사용합니다.");
     m_velocityModeButton.SetCheck(BST_CHECKED);
     m_joystick.SetMode(JoystickMode::Velocity);
     m_hostEdit.SetWindowText(L"127.0.0.1");
@@ -422,7 +449,7 @@ int MfcDashboardFrame::Scale(int logicalPixels) const noexcept
 
 int MfcDashboardFrame::LayoutX(int logicalX, int clientWidth) const noexcept
 {
-    return ::MulDiv(logicalX, clientWidth, 1100);
+    return ::MulDiv(logicalX, clientWidth, 1280);
 }
 
 void MfcDashboardFrame::UpdateFonts()
@@ -436,7 +463,7 @@ void MfcDashboardFrame::UpdateFonts()
     static_cast<void>(m_sectionFont.CreateFontW(-::MulDiv(11, m_dpi, 72), 0, 0, 0,
         FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI"));
-    static_cast<void>(m_bodyFont.CreateFontW(-::MulDiv(9, m_dpi, 72), 0, 0, 0,
+    static_cast<void>(m_bodyFont.CreateFontW(-::MulDiv(10, m_dpi, 72), 0, 0, 0,
         FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI"));
 
@@ -458,6 +485,8 @@ void MfcDashboardFrame::UpdateFonts()
     controls.push_back(&m_positionModeButton);
     controls.push_back(&m_centerGimbalButton);
     controls.push_back(&m_cameraViewCheck);
+    controls.insert(controls.end(), {&m_workspaceTabs, &m_requestEdit, &m_requestOutput, &m_requestHelp,
+        &m_previewRequestButton, &m_executeRequestButton, &m_cancelRequestButton, &m_diagnoseRequestButton});
     controls.push_back(&m_joystickSpeedStatus);
     for (CWnd* control : controls)
     {
@@ -467,74 +496,68 @@ void MfcDashboardFrame::UpdateFonts()
     m_telemetryStatus.SetFont(&m_sectionFont);
 }
 
-void MfcDashboardFrame::LayoutControls(int clientWidth, int clientHeight)
+void MfcDashboardFrame::LayoutControls(int width, int height)
 {
-    if (!::IsWindow(m_hostEdit.GetSafeHwnd()) || clientWidth <= 0 || clientHeight <= 0)
-    {
-        return;
-    }
-    const auto x = [this, clientWidth](int value) { return LayoutX(value, clientWidth); };
+    if (!::IsWindow(m_hostEdit.GetSafeHwnd()) || width <= 0 || height <= 0) return;
+    const auto x = [this, width](int value) { return LayoutX(value, width); };
     const auto y = [this](int value) { return Scale(value); };
-    const int extraHeight = std::max(0, clientHeight - y(900));
-    const int historyTitleY = y(685) + extraHeight / 2;
-    const int historyFilterY = historyTitleY + y(35);
-    const int historyListY = historyTitleY + y(75);
-    const int packetListBottom = historyTitleY - y(20);
-    const int contentBottom = clientHeight - y(35);
     const auto move = [&](CWnd& control, int left, int top, int right, int bottom) {
-        control.SetWindowPos(nullptr, x(left), top, x(right) - x(left), bottom - top,
-            SWP_NOACTIVATE | SWP_NOZORDER);
+        control.SetWindowPos(nullptr, x(left), y(top), x(right)-x(left), y(bottom)-y(top), SWP_NOACTIVATE | SWP_NOZORDER);
     };
-
-    move(m_hostEdit, 35, y(105), 205, y(132));
-    move(m_portEdit, 215, y(105), 295, y(132));
-    move(m_connectButton, 310, y(103), 405, y(134));
-    move(m_disconnectButton, 415, y(103), 525, y(134));
-    move(m_connectionStatus, 540, y(105), 655, y(130));
-    move(m_automaticReconnectCheck, 310, y(140), 430, y(162));
-    move(m_reconnectStatus, 440, y(142), 650, y(162));
-    move(m_equipmentModeCombo, 35, y(195), 255, y(310));
-    move(m_powerOnButton, 35, y(225), 135, y(258));
-    move(m_powerOffButton, 145, y(225), 245, y(258));
-    move(m_initializeButton, 255, y(225), 355, y(258));
-    move(m_panEdit, 385, y(225), 460, y(252));
-    move(m_tiltEdit, 470, y(225), 545, y(252));
-    move(m_setTargetButton, 555, y(223), 655, y(256));
-    move(m_velocityModeButton, 395, y(270), 475, y(294));
-    move(m_positionModeButton, 480, y(270), 560, y(294));
-    move(m_centerGimbalButton, 395, y(300), 475, y(332));
-    move(m_joystickSpeedStatus, 395, y(337), 565, y(360));
-    move(m_joystick, 570, y(265), 650, y(345));
-    move(m_startScanButton, 35, y(270), 145, y(303));
-    move(m_stopScanButton, 155, y(270), 265, y(303));
-    move(m_requestStatusButton, 275, y(270), 385, y(303));
-    move(m_faultCombo, 680, y(310), 815, y(430));
-    move(m_injectFaultButton, 825, y(308), 925, y(341));
-    move(m_clearFaultButton, 935, y(308), 1035, y(341));
-    move(m_responseModeCombo, 680, y(350), 810, y(470));
-    move(m_responseDelayEdit, 820, y(350), 890, y(377));
-    move(m_applyResponseModeButton, 930, y(348), 1035, y(380));
-    move(m_scenarioPathEdit, 680, y(105), 940, y(132));
-    move(m_browseScenarioButton, 950, y(103), 1035, y(134));
-    move(m_startScenarioButton, 680, y(145), 805, y(178));
-    move(m_stopWorkflowButton, 815, y(145), 920, y(178));
-    move(m_workflowStatus, 680, y(183), 1035, y(210));
-    move(m_startReplayButton, 680, y(235), 830, y(268));
-    move(m_acknowledgeAlarmButton, 840, y(235), 985, y(268));
-    move(m_cameraViewCheck, 680, y(275), 830, y(300));
-    move(m_operationStatus, 35, y(310), 385, y(350));
-    move(m_telemetryStatus, 35, y(390), 650, y(445));
-    move(m_heartbeatStatus, 680, y(390), 1035, y(415));
-    move(m_heartbeatWarningEdit, 680, y(420), 750, y(447));
-    move(m_heartbeatFaultEdit, 760, y(420), 830, y(447));
-    move(m_applyHeartbeatSettingsButton, 840, y(418), 1035, y(450));
-    move(m_packetList, 35, y(495), 650, packetListBottom);
-    move(m_errorList, 680, y(495), 1035, packetListBottom);
-    move(m_historyDeviceEdit, 35, historyFilterY, 210, historyFilterY + y(27));
-    move(m_historyCategoryCombo, 220, historyFilterY, 405, historyFilterY + y(180));
-    move(m_historySearchEdit, 415, historyFilterY, 690, historyFilterY + y(27));
-    move(m_refreshHistoryButton, 700, historyFilterY - y(2), 825, historyFilterY + y(30));
-    move(m_historyList, 35, historyListY, 1035, contentBottom);
+    const int logicalHeight = ::MulDiv(height, 96, static_cast<int>(m_dpi));
+    const int tab = m_workspaceTabs.GetCurSel();
+    const auto show = [](std::initializer_list<CWnd*> controls, bool visible) {
+        for (auto* control : controls) control->ShowWindow(visible ? SW_SHOWNA : SW_HIDE);
+    };
+    show({&m_equipmentModeCombo, &m_powerOnButton, &m_powerOffButton, &m_initializeButton,
+        &m_panEdit, &m_tiltEdit, &m_setTargetButton, &m_startScanButton, &m_stopScanButton,
+        &m_requestStatusButton, &m_velocityModeButton, &m_positionModeButton, &m_centerGimbalButton,
+        &m_joystick, &m_joystickSpeedStatus, &m_cameraViewCheck}, tab == 0);
+    show({&m_scenarioPathEdit, &m_browseScenarioButton, &m_startScenarioButton, &m_stopWorkflowButton,
+        &m_startReplayButton, &m_acknowledgeAlarmButton, &m_workflowStatus, &m_faultCombo,
+        &m_injectFaultButton, &m_clearFaultButton, &m_responseModeCombo, &m_responseDelayEdit,
+        &m_applyResponseModeButton, &m_heartbeatWarningEdit, &m_heartbeatFaultEdit, &m_applyHeartbeatSettingsButton}, tab == 1);
+    show({&m_historyDeviceEdit, &m_historyCategoryCombo, &m_historySearchEdit, &m_refreshHistoryButton,
+        &m_historyList, &m_packetList, &m_errorList}, tab == 2);
+    move(m_hostEdit, 35, 82, 230, 110); move(m_portEdit, 240, 82, 310, 110);
+    move(m_connectButton, 325, 80, 415, 112); move(m_disconnectButton, 425, 80, 525, 112);
+    move(m_automaticReconnectCheck, 550, 84, 670, 110); move(m_reconnectStatus, 690, 85, 840, 110);
+    move(m_connectionStatus, 380, 30, 680, 58);
+    move(m_telemetryStatus, 35, 132, 1235, 176); move(m_heartbeatStatus, 35, 181, 1235, 203);
+    move(m_workspaceTabs, 28, 216, 845, 247);
+    move(m_operationStatus, 40, logicalHeight-65, 825, logicalHeight-20);
+    move(m_requestEdit, 880, 263, 1245, 340);
+    move(m_previewRequestButton, 880, 350, 990, 385); move(m_executeRequestButton, 1000, 350, 1100, 385);
+    move(m_cancelRequestButton, 1110, 350, 1245, 385);
+    move(m_diagnoseRequestButton, 880, 398, 1245, 433);
+    move(m_requestHelp, 880, 446, 1245, 505);
+    move(m_requestOutput, 880, 516, 1245, logicalHeight-25);
+    move(m_equipmentModeCombo, 50, 290, 350, 420);
+    move(m_powerOnButton, 50, 345, 165, 382); move(m_powerOffButton, 175, 345, 290, 382);
+    move(m_initializeButton, 300, 345, 415, 382);
+    move(m_panEdit, 50, 430, 160, 462); move(m_tiltEdit, 180, 430, 290, 462);
+    move(m_setTargetButton, 305, 429, 420, 464);
+    move(m_velocityModeButton, 460, 291, 570, 319); move(m_positionModeButton, 580, 291, 690, 319);
+    move(m_joystick, 535, 335, 710, 510); move(m_centerGimbalButton, 460, 530, 575, 565);
+    move(m_joystickSpeedStatus, 585, 536, 805, 565);
+    move(m_startScanButton, 50, 505, 165, 542); move(m_stopScanButton, 175, 505, 290, 542);
+    move(m_requestStatusButton, 305, 505, 420, 542); move(m_cameraViewCheck, 50, 565, 360, 595);
+    move(m_scenarioPathEdit, 50, 288, 675, 318); move(m_browseScenarioButton, 690, 286, 805, 320);
+    move(m_startScenarioButton, 50, 333, 205, 369); move(m_stopWorkflowButton, 215, 333, 355, 369);
+    move(m_startReplayButton, 365, 333, 580, 369); move(m_acknowledgeAlarmButton, 590, 333, 805, 369);
+    move(m_workflowStatus, 50, 379, 805, 407);
+    move(m_faultCombo, 50, 453, 325, 580); move(m_injectFaultButton, 340, 452, 505, 488);
+    move(m_clearFaultButton, 515, 452, 680, 488);
+    move(m_responseModeCombo, 50, 528, 325, 655); move(m_responseDelayEdit, 340, 528, 440, 558);
+    move(m_applyResponseModeButton, 515, 526, 680, 562);
+    move(m_heartbeatWarningEdit, 50, 608, 170, 638); move(m_heartbeatFaultEdit, 185, 608, 305, 638);
+    move(m_applyHeartbeatSettingsButton, 340, 606, 590, 642);
+    move(m_historyDeviceEdit, 50, 292, 270, 322); move(m_historyCategoryCombo, 285, 292, 465, 455);
+    move(m_historySearchEdit, 480, 292, 675, 322); move(m_refreshHistoryButton, 690, 290, 805, 324);
+    const int middle = 345 + (logicalHeight-100-345)*55/100;
+    move(m_historyList, 50, 345, 805, middle);
+    move(m_packetList, 50, middle+35, 420, logicalHeight-90);
+    move(m_errorList, 435, middle+35, 805, logicalHeight-90);
     m_historyList.SetHorizontalExtent(x(1400));
 }
 
@@ -551,7 +574,7 @@ void MfcDashboardFrame::OnSize(UINT type, int width, int height)
 void MfcDashboardFrame::OnGetMinMaxInfo(MINMAXINFO* minMaxInfo)
 {
     CFrameWnd::OnGetMinMaxInfo(minMaxInfo);
-    RECT minimum{0, 0, Scale(1100), Scale(900)};
+    RECT minimum{0, 0, Scale(1120), Scale(720)};
     ::AdjustWindowRectExForDpi(&minimum, GetStyle(), FALSE, GetExStyle(), m_dpi);
     minMaxInfo->ptMinTrackSize.x = minimum.right - minimum.left;
     minMaxInfo->ptMinTrackSize.y = minimum.bottom - minimum.top;
@@ -575,6 +598,8 @@ LRESULT MfcDashboardFrame::OnDpiChanged(WPARAM wParam, LPARAM lParam)
 void MfcDashboardFrame::OnDestroy()
 {
     KillTimer(kJoystickTimerId);
+    m_requestService.SetWakeupHandler({});
+    m_requestService.Stop();
     SaveSettings();
     m_workflowService.Progress().SetWakeupHandler({});
     m_workflowService.Stop();
@@ -595,45 +620,107 @@ void MfcDashboardFrame::OnDestroy()
 void MfcDashboardFrame::OnPaint()
 {
     CPaintDC dc(this);
-    CRect client;
-    GetClientRect(&client);
-    dc.FillSolidRect(client, RGB(244, 247, 250));
-    dc.SetBkMode(TRANSPARENT);
-    dc.SetTextColor(RGB(25, 39, 58));
-    auto* previousFont = dc.SelectObject(&m_headingFont);
+    CRect client; GetClientRect(&client);
     const auto x = [this, &client](int value) { return LayoutX(value, client.Width()); };
     const auto y = [this](int value) { return Scale(value); };
-    const int extraHeight = std::max(0, client.Height() - y(900));
-    const int historyTitleY = y(685) + extraHeight / 2;
+    dc.FillSolidRect(client, RGB(242, 246, 250));
+    dc.FillSolidRect(CRect(x(25), y(250), x(845), client.bottom-y(80)), RGB(255,255,255));
+    dc.FillSolidRect(CRect(x(865), y(216), x(1260), client.bottom-y(15)), RGB(255,255,255));
+    dc.SetBkMode(TRANSPARENT); dc.SetTextColor(RGB(25,39,58));
+    auto* previous = dc.SelectObject(&m_headingFont);
     dc.TextOut(x(35), y(24), L"DeviceLink Studio");
     dc.SelectObject(&m_sectionFont);
-    dc.TextOut(x(35), y(76), L"TCP 연결");
-    dc.TextOut(x(35), y(170), L"운용 모드 / 가상장비 제어");
-    dc.TextOut(x(35), y(365), L"실시간 장비 상태");
-    dc.TextOut(x(35), y(465), L"수신 패킷");
-    dc.TextOut(x(680), y(465), L"통신 오류 / 알람");
-    dc.TextOut(x(680), y(76), L"시나리오 자동화");
-    dc.TextOut(x(680), y(215), L"Replay / 알람 처리");
-    dc.TextOut(x(680), y(280), L"장비 / 통신 장애 시뮬레이션");
-    dc.TextOut(x(35), historyTitleY, L"SQLite 이벤트 이력");
-    dc.SelectObject(previousFont);
-    dc.SetTextColor(RGB(80, 94, 111));
-    dc.TextOut(x(35), y(137), L"Host");
-    dc.TextOut(x(215), y(137), L"Port");
-    const bool droneMode = m_equipmentModeCombo.GetCurSel() == 1;
-    dc.TextOut(x(385), y(202), droneMode ? L"X 좌표 m" : L"Pan (−170~170)");
-    dc.TextOut(x(500), y(202), droneMode ? L"Y 좌표 m" : L"Tilt (−45~80)");
-    dc.TextOut(x(895), y(353), L"ms");
-    dc.TextOut(x(680), y(405), L"Warning ms");
-    dc.TextOut(x(760), y(405), L"Fault ms");
-    dc.TextOut(x(35), historyTitleY + y(15), L"Device ID");
-    dc.TextOut(x(220), historyTitleY + y(15), L"이벤트 종류");
-    dc.TextOut(x(415), historyTitleY + y(15), L"검색어");
-    CString metrics;
-    metrics.Format(L"Packets %zu    Errors %zu    Active alarms %zu    Telemetry samples %zu",
-        m_dashboardModel.Packets().size(), m_dashboardModel.Errors().size(),
-        m_runtime.Alarms().ActiveAlarms().size(), m_runtime.Telemetry().RecentSamples().size());
-    dc.TextOut(x(680), y(28), metrics);
+    dc.TextOut(x(880), y(226), L"자연어 요청 / 관측 진단");
+    dc.SelectObject(&m_bodyFont); dc.SetTextColor(RGB(75,90,108));
+    dc.TextOut(x(35), y(60), L"장비 주소"); dc.TextOut(x(240), y(60), L"Port");
+    const int tab = m_workspaceTabs.GetCurSel();
+    if (tab == 0)
+    {
+        dc.TextOut(x(50), y(263), L"운용 모드"); dc.TextOut(x(460), y(263), L"짐벌 조이스틱");
+        dc.TextOut(x(50), y(403), L"Pan / X 좌표"); dc.TextOut(x(180), y(403), L"Tilt / Y 좌표");
+        dc.TextOut(x(50), y(610), L"명령 전송과 실제 도달 확인은 요청 패널에서 구분합니다.");
+    }
+    else if (tab == 1)
+    {
+        dc.TextOut(x(50), y(263), L"시나리오 / Record & Replay");
+        dc.TextOut(x(50), y(425), L"가상 고장 주입 / 해제");
+        dc.TextOut(x(50), y(503), L"응답 모드 / 지연 시간 (ms)");
+        dc.TextOut(x(50), y(581), L"Heartbeat Warning / Fault (ms)");
+    }
+    else
+    {
+        dc.TextOut(x(50), y(263), L"Device ID"); dc.TextOut(x(285), y(263), L"분류"); dc.TextOut(x(480), y(263), L"검색");
+        const int logicalHeight = ::MulDiv(client.Height(),96,static_cast<int>(m_dpi));
+        const int middle = 345+(logicalHeight-100-345)*55/100;
+        dc.TextOut(x(50), y(middle+10), L"패킷 상세"); dc.TextOut(x(435), y(middle+10), L"오류 / 알람");
+    }
+    dc.SelectObject(previous);
+}
+
+void MfcDashboardFrame::OnWorkspaceChanged(NMHDR*, LRESULT* result)
+{
+    CRect client; GetClientRect(&client);
+    LayoutControls(client.Width(), client.Height());
+    Invalidate(FALSE);
+    *result = 0;
+}
+
+void MfcDashboardFrame::OnPreviewRequest()
+{
+    CString input; m_requestEdit.GetWindowText(input);
+    const auto plan = Application::OperatorRequestService::Plan(std::wstring(input.GetString()));
+    m_requestOutput.SetWindowText(plan.description.c_str());
+    m_previewedInstruction = plan.valid ? input : CString();
+}
+
+void MfcDashboardFrame::OnExecuteRequest()
+{
+    if (m_requestService.IsRunning() || m_workflowService.IsRunning()) return;
+    if (m_equipmentModeCombo.GetCurSel() == 1)
+    { m_requestOutput.SetWindowText(L"자연어 운용은 현재 고정형 짐벌 모드에서 지원합니다."); return; }
+    CString input; m_requestEdit.GetWindowText(input);
+    if (input != m_previewedInstruction)
+    {
+        OnPreviewRequest();
+        if (!m_previewedInstruction.IsEmpty())
+        { m_requestOutput.SetSel(-1, -1); m_requestOutput.ReplaceSel(L"\r\n\r\n계획을 확인한 뒤 실행을 누르세요."); }
+        return;
+    }
+    const auto plan = Application::OperatorRequestService::Plan(std::wstring(input.GetString()));
+    m_joystick.Reset(); m_joystickPanAxis = 0; m_joystickTiltAxis = 0; m_positionTargetDirty = false;
+    if (m_requestService.Submit(plan))
+    {
+        m_requestOutput.SetWindowText((plan.description + L"\r\n\r\n[처리 중] 실제 장비 응답을 기다립니다…\r\n").c_str());
+        m_previewedInstruction.Empty();
+    }
+    UpdateCommandAvailability();
+}
+
+void MfcDashboardFrame::OnCancelRequest()
+{
+    m_requestService.Cancel();
+    m_requestOutput.SetSel(-1,-1);
+    m_requestOutput.ReplaceSel(L"\r\n중지를 요청했습니다. 현재 전송한 동작은 응답/시간 초과 후 종료합니다.\r\n");
+}
+
+void MfcDashboardFrame::OnDiagnoseRequest()
+{
+    if (m_requestService.IsRunning() || m_workflowService.IsRunning()) return;
+    m_requestEdit.SetWindowText(L"고장 진단");
+    OnPreviewRequest();
+    OnExecuteRequest();
+}
+
+LRESULT MfcDashboardFrame::OnRequestProgress(WPARAM, LPARAM)
+{
+    for (const auto& message : m_requestService.Drain())
+    {
+        if (m_requestOutput.GetWindowTextLength() > 45000) m_requestOutput.SetWindowText(L"이전 표시를 정리했습니다.\r\n");
+        m_requestOutput.SetSel(-1,-1);
+        m_requestOutput.ReplaceSel((L"\r\n" + message + L"\r\n").c_str());
+    }
+    RefreshDashboardViews();
+    return 0;
 }
 
 void MfcDashboardFrame::OnConnect()
@@ -1042,7 +1129,7 @@ void MfcDashboardFrame::OnTimer(UINT_PTR timerId)
     }
     m_lastJoystickTick = now;
 
-    if (timerId == kJoystickTimerId && m_powerEnabled &&
+    if (timerId == kJoystickTimerId && m_powerEnabled && !m_requestService.IsRunning() &&
         m_equipmentModeCombo.GetCurSel() != 1)
     {
         if (m_velocityMode &&
@@ -1265,6 +1352,7 @@ void MfcDashboardFrame::UpdateCommandAvailability()
     const auto state = m_gimbalService.ConnectionState().value_or(Core::ConnectionState::Disconnected);
     const bool connected = state == Core::ConnectionState::Connected;
     const bool workflowRunning = m_workflowService.IsRunning();
+    const bool requestRunning = m_requestService.IsRunning();
     m_connectButton.EnableWindow(state == Core::ConnectionState::Disconnected);
     m_disconnectButton.EnableWindow(state != Core::ConnectionState::Disconnected);
     for (CButton* button : {&m_powerOnButton, &m_powerOffButton, &m_initializeButton,
@@ -1295,6 +1383,21 @@ void MfcDashboardFrame::UpdateCommandAvailability()
         connected && fixedCameraMode && m_powerEnabled);
     SetControlEnabledIfChanged(m_centerGimbalButton,
         connected && fixedCameraMode && m_powerEnabled);
+    m_previewRequestButton.EnableWindow(!requestRunning);
+    m_requestEdit.EnableWindow(!requestRunning);
+    m_executeRequestButton.EnableWindow(connected && fixedCameraMode && !requestRunning && !workflowRunning);
+    m_diagnoseRequestButton.EnableWindow(connected && fixedCameraMode && !requestRunning && !workflowRunning);
+    m_cancelRequestButton.EnableWindow(requestRunning);
+    m_equipmentModeCombo.EnableWindow(!requestRunning && !workflowRunning);
+    if (requestRunning)
+    {
+        for (CWnd* control : std::initializer_list<CWnd*>{&m_connectButton, &m_disconnectButton,
+                 &m_powerOnButton, &m_powerOffButton, &m_initializeButton, &m_setTargetButton,
+                 &m_startScanButton, &m_stopScanButton, &m_requestStatusButton, &m_injectFaultButton,
+                 &m_clearFaultButton, &m_applyResponseModeButton, &m_cameraViewCheck,
+                 &m_startScenarioButton, &m_startReplayButton, &m_joystick, &m_centerGimbalButton,
+                 &m_velocityModeButton, &m_positionModeButton}) control->EnableWindow(FALSE);
+    }
 }
 
 void MfcDashboardFrame::RefreshEventHistory()

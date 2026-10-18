@@ -4,6 +4,7 @@
 #include "DeviceLink/Application/EventLogQueryService.h"
 #include "DeviceLink/Application/OperatorSettingsService.h"
 #include "DeviceLink/Application/OperatorWorkflowService.h"
+#include "DeviceLink/Application/OperatorRequestService.h"
 #include "DeviceLink/Application/VirtualGimbalService.h"
 #include "DeviceLink/UI/DashboardBinding.h"
 #include "DeviceLink/UI/DashboardModel.h"
@@ -48,6 +49,11 @@ public:
     CameraViewCheckId,
     ApplyHeartbeatSettingsButtonId,
     EquipmentModeComboId,
+    PreviewRequestButtonId,
+    ExecuteRequestButtonId,
+    CancelRequestButtonId,
+    DiagnoseRequestButtonId,
+    WorkspaceTabId,
   };
 
   MfcDashboardFrame(
@@ -55,7 +61,8 @@ public:
       Application::VirtualGimbalService &gimbalService,
       Application::OperatorWorkflowService &workflowService,
       Application::EventLogQueryService &eventLogQueryService,
-      Application::OperatorSettingsService &settingsService) noexcept;
+      Application::OperatorSettingsService &settingsService,
+      Application::OperatorRequestService &requestService) noexcept;
   ~MfcDashboardFrame() override;
 
   [[nodiscard]] bool CreateDashboard();
@@ -98,6 +105,12 @@ protected:
   afx_msg void OnCenterGimbal();
   afx_msg void OnToggleCameraView();
   afx_msg LRESULT OnWorkflowProgress(WPARAM wParam, LPARAM lParam);
+  afx_msg void OnWorkspaceChanged(NMHDR*, LRESULT* result);
+  afx_msg void OnPreviewRequest();
+  afx_msg void OnExecuteRequest();
+  afx_msg void OnCancelRequest();
+  afx_msg void OnDiagnoseRequest();
+  afx_msg LRESULT OnRequestProgress(WPARAM, LPARAM);
   DECLARE_MESSAGE_MAP()
 
 private:
@@ -131,6 +144,16 @@ private:
   Application::OperatorWorkflowService &m_workflowService;
   Application::EventLogQueryService &m_eventLogQueryService;
   Application::OperatorSettingsService &m_settingsService;
+  Application::OperatorRequestService &m_requestService;
+  CTabCtrl m_workspaceTabs;
+  CEdit m_requestEdit;
+  CEdit m_requestOutput;
+  CStatic m_requestHelp;
+  CButton m_previewRequestButton;
+  CButton m_executeRequestButton;
+  CButton m_cancelRequestButton;
+  CButton m_diagnoseRequestButton;
+  CString m_previewedInstruction;
   DashboardModel m_dashboardModel;
   std::unique_ptr<DashboardBinding> m_dashboardBinding;
 

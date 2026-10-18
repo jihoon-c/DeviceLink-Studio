@@ -4,6 +4,8 @@
 #include "DeviceLink/Application/OperatorSettingsService.h"
 #include "DeviceLink/Application/SqliteFrameReplaySource.h"
 #include "DeviceLink/Application/VirtualGimbalService.h"
+#include "DeviceLink/Application/DeviceAgentService.h"
+#include "DeviceLink/Application/OperatorRequestService.h"
 #include "DeviceLink/Infrastructure/AtomicTextFileStore.h"
 #include "DeviceLink/Infrastructure/SqliteEventRepository.h"
 #include "DeviceLink/Transport/TcpTransport.h"
@@ -15,6 +17,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <string_view>
+#include <string>
 #include <vector>
 
 namespace
@@ -32,8 +36,11 @@ std::int64_t CurrentUnixMilliseconds()
 
 } // namespace
 
-int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int commandShow)
+int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int commandShow)
 {
+    const std::wstring_view arguments(commandLine);
+    const bool demoHidden = arguments == L"--demo-hidden";
+    const bool demo = demoHidden || arguments == L"--demo";
     // Per-monitor V2 keeps Win32 non-client areas and child controls sharp when
     // the dashboard moves between displays with different scale factors.
     static_cast<void>(::SetProcessDpiAwarenessContext(
@@ -44,8 +51,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int commandShow)
     {
         return 1;
     }
+    INITCOMMONCONTROLSEX commonControls{sizeof(INITCOMMONCONTROLSEX), ICC_TAB_CLASSES};
+    if (!::InitCommonControlsEx(&commonControls)) return 1;
 
-    const std::filesystem::path databasePath(L"DeviceLinkStudio.sqlite");
+    if (demo) std::filesystem::create_directories(L"artifacts/demo");
+    const std::filesystem::path databasePath(demo ? L"artifacts/demo/mfc.sqlite" : L"DeviceLinkStudio.sqlite");
     DeviceLink::Application::DeviceRuntime runtime(
         std::make_unique<DeviceLink::Infrastructure::SqliteEventRepository>(
             databasePath),
@@ -69,10 +79,31 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int commandShow)
     DeviceLink::Application::EventLogQueryService eventLogQueryService(
         replayRepository, [&runtime] { runtime.FlushEventLog(); });
     DeviceLink::Application::OperatorSettingsService settingsService(
-        scenarioFileStore, L"DeviceLinkStudio.settings");
+        scenarioFileStore, demo ? L"artifacts/demo/mfc.settings" : L"DeviceLinkStudio.settings");
+    if (demo)
+    {
+        DeviceLink::Application::OperatorSettings initial;
+        initial.scenarioPath = (std::filesystem::current_path() / L"scenarios/unreal-gimbal-demo.dls").string();
+        if (!settingsService.Save(initial).succeeded) return 1;
+    }
 
+    DeviceLink::Application::DeviceAgentService requestAgent(runtime.Devices(), gimbalService);
+    DeviceLink::Application::OperatorRequestService requestService([&requestAgent](const auto& step) {
+        using Action = DeviceLink::Application::OperatorRequestAction;
+        switch (step.action)
+        {
+        case Action::Status:
+        case Action::Diagnose: return requestAgent.GetTelemetry();
+        case Action::PowerOn: return requestAgent.SetPower(true);
+        case Action::PowerOff: return requestAgent.SetPower(false);
+        case Action::Initialize: return requestAgent.Initialize();
+        case Action::Move: return requestAgent.SetGimbalAngle(step.pan, step.tilt);
+        case Action::ClearFault: return requestAgent.ClearFault();
+        }
+        return DeviceLink::Application::AgentOperationResult{false, "Unsupported action"};
+    });
     DeviceLink::UI::MfcDashboardFrame dashboard(
-        runtime, gimbalService, workflowService, eventLogQueryService, settingsService);
+        runtime, gimbalService, workflowService, eventLogQueryService, settingsService, requestService);
     if (!dashboard.CreateDashboard())
     {
         return 1;
@@ -80,9 +111,23 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int commandShow)
 
     application.m_pMainWnd = &dashboard;
     const int showCommand = commandShow == SW_HIDE ? SW_SHOWNORMAL : commandShow;
-    dashboard.ShowWindow(showCommand);
-    dashboard.UpdateWindow();
-    dashboard.SetForegroundWindow();
+    if (!demoHidden)
+    {
+        dashboard.ShowWindow(showCommand);
+        dashboard.UpdateWindow();
+        dashboard.SetForegroundWindow();
+    }
+    if (demo)
+    {
+        // Dispatch the existing operator action on the UI thread. The action uses
+        // Application services; the launcher never accesses MFC controls.
+        dashboard.SendMessage(WM_COMMAND, DeviceLink::UI::MfcDashboardFrame::ConnectButtonId);
+        const bool connected = gimbalService.ConnectionState().value_or(
+            DeviceLink::Core::ConnectionState::Disconnected) == DeviceLink::Core::ConnectionState::Connected;
+        const std::string ready = "{\"pid\":" + std::to_string(::GetCurrentProcessId()) +
+            ",\"connected\":" + (connected ? "true}" : "false}");
+        static_cast<void>(scenarioFileStore.WriteAtomically(L"artifacts/demo/mfc-ready.json", ready));
+    }
     MSG message{};
     while (GetMessage(&message, nullptr, 0, 0) > 0)
     {
