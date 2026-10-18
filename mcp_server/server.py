@@ -21,9 +21,13 @@ import uuid
 from typing import Any
 
 if __package__:
+    from .instruction_service import execute_instruction
+    from .diagnostic_service import diagnose_device
     from .diagnostic_reports import DiagnosticReports
     from .llm_diagnostics import explain as _langchain_explanation
 else:
+    from instruction_service import execute_instruction
+    from diagnostic_service import diagnose_device
     from diagnostic_reports import DiagnosticReports
     from llm_diagnostics import explain as _langchain_explanation
 
@@ -121,10 +125,11 @@ TOOLS = [
     },
     {
         "name": "diagnose_device",
-        "description": "Collect fresh telemetry, persisted events and manual evidence; save a diagnostic report without changing device state.",
+        "description": "Rule-based diagnosis using fresh telemetry, events and manual evidence. Saves a report without changing device state. LLM explanation is optional.",
         "inputSchema": _schema({
             "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000},
             "event_limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            "include_llm": {"type": "boolean", "default": False},
         }),
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
     },
@@ -191,6 +196,8 @@ TOOLS = [
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 5000},
                 "auto_connect": {"type": "boolean", "default": True},
                 "auto_prepare": {"type": "boolean", "default": True},
+                "preview_only": {"type": "boolean", "default": False},
+                "include_llm": {"type": "boolean", "default": False},
             },
             ["instruction"],
         ),
@@ -215,8 +222,10 @@ MANUAL_DIR = ROOT / "docs" / "agent"
 
 
 class Bridge:
-    def __init__(self, report_directory: Path | None = None) -> None:
+    def __init__(self, report_directory: Path | None = None,
+                 environment: dict[str, str] | None = None) -> None:
         self._process: subprocess.Popen[str] | None = None
+        self._environment = dict(environment) if environment is not None else None
         self._lock = threading.Lock()
         self._connected_endpoint: tuple[str, int] | None = None
         self._diagnoses: dict[str, dict[str, Any]] = {}
@@ -257,11 +266,12 @@ class Bridge:
         return self._connected_endpoint
 
     @staticmethod
-    def _find_executable() -> Path:
-        configured = os.environ.get("DEVICELINK_AGENT_BRIDGE")
+    def _find_executable(environment: dict[str, str] | None = None) -> Path:
+        configured = (environment if environment is not None else os.environ).get("DEVICELINK_AGENT_BRIDGE")
         candidates = [Path(configured)] if configured else []
         candidates.extend(
             [
+                ROOT / "build-demo" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build-agent-diag" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build-agent" / "DeviceLinkAgentBridge.exe",
                 ROOT / "build" / "Release" / "DeviceLinkAgentBridge.exe",
@@ -284,7 +294,7 @@ class Bridge:
                     for stream in (self._process.stdin, self._process.stdout):
                         if stream is not None:
                             stream.close()
-                executable = self._find_executable()
+                executable = self._find_executable(self._environment)
                 self._process = subprocess.Popen(
                     [str(executable)],
                     stdin=subprocess.PIPE,
@@ -293,6 +303,8 @@ class Bridge:
                     text=True,
                     encoding="utf-8",
                     bufsize=1,
+                    env=self._environment,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 )
                 self._connected_endpoint = None
                 self._diagnoses.clear()
@@ -438,52 +450,11 @@ def _fresh_telemetry(bridge: Bridge, timeout_ms: int) -> dict[str, Any]:
     return {"ok": True, "age_ms": age_ms, "raw": result}
 
 
-def _diagnose_device(bridge: Bridge, timeout_ms: int, event_limit: int) -> dict[str, Any]:
-    observation = _fresh_telemetry(bridge, timeout_ms)
-    window_end = int(time.time() * 1000)
-    if observation["ok"]:
-        window_end = observation["raw"]["observed_at_unix_ms"] + 1000
-    window_start = window_end - 60000
-    events = bridge.call(f"GET_HISTORY {window_start} {window_end} {event_limit}")
-    event_status = "available" if events.get("ok") else "unavailable"
-    if not observation["ok"]:
-        return {"ok": True, "verdict": "INCONCLUSIVE", "message": observation["message"],
-                "observation": observation.get("raw"), "events": events.get("events", []),
-                "event_status": event_status, "event_window": [window_start, window_end],
-                "evidence_refs": []}
-    raw = observation["raw"]
-    telemetry = raw["telemetry"]
-    fault = telemetry.get("fault")
-    state = telemetry.get("state")
-    known_faults = {"MotorStall", "OverTemperature", "SensorFailure"}
-    if state == "Fault" and fault in known_faults:
-        manual = _search_manual(fault, 3)
-        hypothesis = fault
-        message = f"Observed {fault} in fresh telemetry; consult cited manual sections before recovery."
-    elif state == "Ready" and fault == "None":
-        manual = {"matches": []}
-        hypothesis = None
-        message = "Fresh telemetry reports Ready with no active fault."
-    else:
-        manual = _search_manual("telemetry recovery", 3)
-        hypothesis = None
-        message = "Current state does not identify a supported fault."
-    diagnosis_id = bridge.record_diagnosis(raw.get("device_id", ""),
-        raw["observed_at_unix_ms"], telemetry) if hypothesis else None
-    result = {"ok": True, "verdict": "OBSERVED" if hypothesis or (state == "Ready" and fault == "None") else "INCONCLUSIVE",
-            "diagnosis_id": diagnosis_id,
-            "message": message, "device_id": raw.get("device_id"),
-            "observed_at_unix_ms": raw["observed_at_unix_ms"], "telemetry_age_ms": observation["age_ms"],
-            "telemetry": telemetry, "events": events.get("events", []),
-            "event_status": event_status,
-            "event_window": [window_start, window_end],
-            "hypothesis": hypothesis, "evidence_refs": manual["matches"],
-            "llm_explanation": _langchain_explanation(telemetry, events.get("events", []), manual["matches"]),
-            "recommended_check": "Use verify_recovery after an explicitly requested recovery action" if hypothesis else None,
-            "actions_taken": []}
-    if diagnosis_id:
-        result["report"] = bridge.save_report(result)
-    return result
+def _diagnose_device(bridge: Bridge, timeout_ms: int, event_limit: int,
+                     include_llm: bool = False) -> dict[str, Any]:
+    return diagnose_device(bridge, timeout_ms, event_limit,
+        fresh_telemetry=_fresh_telemetry, search_manual=_search_manual,
+        explain=_langchain_explanation if include_llm else None)
 
 
 def _verify_recovery(bridge: Bridge, timeout_ms: int) -> dict[str, Any]:
@@ -536,133 +507,12 @@ def _verify_diagnosis(bridge: Bridge, diagnosis_id: str, timeout_ms: int) -> dic
     return result
 
 
-def _contains_any(text: str, values: tuple[str, ...]) -> bool:
-    return any(value in text for value in values)
-
-
-def _extract_angle(instruction: str, names: tuple[str, ...]) -> float | None:
-    joined = "|".join(re.escape(name) for name in names)
-    match = re.search(
-        rf"(?:{joined})\s*(?:각도)?\s*(?:은|는|을|를|=|:)?\s*(-?\d+(?:\.\d+)?)",
-        instruction,
-        re.IGNORECASE,
-    )
-    return float(match.group(1)) if match else None
-
-
 def _execute_instruction(bridge: Bridge, arguments: dict[str, Any]) -> dict[str, Any]:
-    instruction = arguments.get("instruction")
-    if not isinstance(instruction, str) or len(instruction.strip()) < 2:
-        raise ValueError("instruction must contain at least two characters")
-    text = instruction.strip()
-    lowered = text.lower()
-    host = arguments.get("host", "127.0.0.1")
-    if not isinstance(host, str) or not host or any(character.isspace() for character in host):
-        raise ValueError("host must be a non-empty host name or IP address")
-    port = _integer(arguments, "port", 5000)
-    if not 1 <= port <= 65535:
-        raise ValueError("port must be between 1 and 65535")
-    auto_connect = arguments.get("auto_connect", True)
-    auto_prepare = arguments.get("auto_prepare", True)
-    if not isinstance(auto_connect, bool) or not isinstance(auto_prepare, bool):
-        raise ValueError("auto_connect and auto_prepare must be booleans")
-
-    endpoint = re.search(r"((?:\d{1,3}\.){3}\d{1,3}|localhost)\s*:\s*(\d{1,5})", text, re.IGNORECASE)
-    if endpoint:
-        host, port = endpoint.group(1), int(endpoint.group(2))
-        if not 1 <= port <= 65535:
-            raise ValueError("port must be between 1 and 65535")
-
-    pan = _extract_angle(text, ("pan", "팬"))
-    tilt = _extract_angle(text, ("tilt", "틸트"))
-    has_any_angle = pan is not None or tilt is not None
-    if has_any_angle and (pan is None or tilt is None):
-        raise ValueError("Both Pan and Tilt angles are required")
-    if pan is not None and not -170 <= pan <= 170:
-        raise ValueError("Pan must be between -170 and 170 degrees")
-    if tilt is not None and not -45 <= tilt <= 80:
-        raise ValueError("Tilt must be between -45 and 80 degrees")
-
-    wants_connect = _contains_any(lowered, ("연결", "connect")) or endpoint is not None
-    wants_power_off = _contains_any(lowered, ("전원 끄", "전원 off", "power off"))
-    wants_power_on = _contains_any(lowered, ("전원 켜", "전원 on", "power on"))
-    wants_initialize = _contains_any(lowered, ("초기화", "initialize", "home"))
-    wants_telemetry = _contains_any(lowered, ("텔레메트리", "telemetry", "상태 확인", "status"))
-    wants_clear_fault = _contains_any(lowered, ("fault 해제", "고장 해제", "장애 해제", "clear fault", "복구"))
-    fault_name = next((name for name in ("MotorStall", "OverTemperature", "SensorFailure")
-                       if name.lower() in lowered.replace(" ", "")), None)
-    wants_inject_fault = fault_name is not None and _contains_any(
-        lowered, ("주입", "발생", "inject", "simulate"))
-    wants_scenario = _contains_any(lowered, ("motor_stall_recovery", "복구 시험", "recovery test"))
-
-    device_action = any((wants_power_off, wants_power_on, wants_initialize, has_any_angle,
-                         wants_telemetry, wants_clear_fault, wants_inject_fault, wants_scenario))
-    if not wants_connect and not device_action:
-        return {
-            "ok": False,
-            "message": "Unsupported instruction. Include connect, power, initialize, Pan/Tilt, telemetry, fault, or recovery test.",
-        }
-    if wants_power_off and (has_any_angle or wants_power_on or wants_initialize):
-        return {"ok": False, "message": "Power-off cannot be combined with power-on, initialize, or movement."}
-
-    steps: list[dict[str, Any]] = []
-
-    def run(command: str) -> bool:
-        result = bridge.call(command)
-        steps.append({"command": command, "result": result})
-        return bool(result.get("ok"))
-
-    needs_connection = wants_connect or device_action
-    if needs_connection and bridge.connected_endpoint not in {None, (host, port)}:
-        if not auto_connect and not wants_connect:
-            return {
-                "ok": False,
-                "message": "Device is connected to a different endpoint and auto_connect is disabled",
-                "steps": steps,
-            }
-        bridge.close()
-    if needs_connection and ((wants_connect and bridge.connected_endpoint is None) or
-                             (auto_connect and bridge.connected_endpoint is None)):
-        if not run(f"CONNECT {host} {port}"):
-            return {"ok": False, "message": "Connection failed", "steps": steps}
-    elif needs_connection and bridge.connected_endpoint is None:
-        return {"ok": False, "message": "Device is not connected and auto_connect is disabled"}
-
-    if wants_power_off:
-        if not run("POWER_OFF 3000"):
-            return {"ok": False, "message": "Power-off failed", "steps": steps}
-    else:
-        prepare_device = auto_prepare and (has_any_angle or wants_initialize)
-        if wants_power_on or prepare_device:
-            if not run("POWER_ON 3000"):
-                return {"ok": False, "message": "Power-on failed", "steps": steps}
-        if wants_initialize or (has_any_angle and auto_prepare):
-            if not run("INITIALIZE 5000"):
-                return {"ok": False, "message": "Initialization failed", "steps": steps}
-        if wants_scenario:
-            if not run("RUN_SCENARIO motor_stall_recovery 5000"):
-                return {"ok": False, "message": "Recovery scenario failed", "steps": steps}
-        elif wants_inject_fault:
-            if not run(f"INJECT_FAULT {fault_name} 3000"):
-                return {"ok": False, "message": "Fault injection failed", "steps": steps}
-        elif wants_clear_fault:
-            if not run("CLEAR_FAULT 3000"):
-                return {"ok": False, "message": "Fault recovery failed", "steps": steps}
-        if has_any_angle and not run(f"SET_ANGLE {pan:g} {tilt:g} 5000 0.5"):
-            return {"ok": False, "message": "Angle command failed", "steps": steps}
-        if wants_telemetry and not has_any_angle and not run("GET_TELEMETRY 2000"):
-            return {"ok": False, "message": "Telemetry request failed", "steps": steps}
-
-    last_result = steps[-1]["result"] if steps else {}
-    response: dict[str, Any] = {
-        "ok": True,
-        "message": "Natural-language instruction completed",
-        "instruction": text,
-        "steps": steps,
-    }
-    if "telemetry" in last_result:
-        response["telemetry"] = last_result["telemetry"]
-    return response
+    include_llm = arguments.get('include_llm', False)
+    if not isinstance(include_llm, bool):
+        raise ValueError('include_llm must be a boolean')
+    return execute_instruction(bridge, arguments, diagnose=lambda: _diagnose_device(
+        bridge, 2000, 20, include_llm))
 
 
 def call_tool(bridge: Bridge, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -698,9 +548,12 @@ def call_tool(bridge: Bridge, name: str, arguments: dict[str, Any]) -> dict[str,
         limit = _bounded_integer(arguments, "limit", 50, 1, 100)
         return bridge.call(f"GET_HISTORY {start} {end} {limit}")
     if name == "diagnose_device":
+        include_llm = arguments.get("include_llm", False)
+        if not isinstance(include_llm, bool):
+            raise ValueError("include_llm must be a boolean")
         return _diagnose_device(bridge,
             _bounded_integer(arguments, "timeout_ms", 2000, 1, 30000),
-            _bounded_integer(arguments, "event_limit", 20, 1, 100))
+            _bounded_integer(arguments, "event_limit", 20, 1, 100), include_llm)
     if name == "verify_recovery":
         return _verify_recovery(bridge, _bounded_integer(arguments, "timeout_ms", 2000, 1, 30000))
     if name == "verify_diagnosis":

@@ -95,7 +95,7 @@ def run() -> dict[str, object]:
         for fault in ('MotorStall', 'OverTemperature', 'SensorFailure'):
             session.tool('inject_fault', {'fault': fault})
             started = time.monotonic()
-            diagnosis = session.tool('diagnose_device')
+            diagnosis = session.tool('diagnose_device', {'include_llm': True})
             elapsed = round(time.monotonic() - started, 2)
             explanation = diagnosis.get('llm_explanation', {})
             if explanation.get('status') != 'generated' or explanation.get('source_validation') != 'verbatim_manual_procedures':

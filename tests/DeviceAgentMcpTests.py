@@ -225,13 +225,21 @@ class McpServerTests(unittest.TestCase):
                 return {"ok": True, "events": [{"category": "frame-received", "detail": "type=28673"}]}
 
         bridge = FakeBridge()
-        result = self.server.call_tool(bridge, "diagnose_device", {})
+        with patch.object(self.server, '_langchain_explanation', side_effect=AssertionError('LLM must remain optional')) as model:
+            result = self.server.call_tool(bridge, "diagnose_device", {})
+            model.assert_not_called()
         self.assertEqual(result["verdict"], "OBSERVED")
         self.assertEqual(result["hypothesis"], "MotorStall")
         self.assertEqual(result["diagnosis_id"], "diagnosis-1")
         self.assertTrue(result["evidence_refs"])
+        self.assertEqual(result['llm_explanation']['status'], 'skipped_disabled')
         self.assertEqual(bridge.commands[0], "GET_TELEMETRY 2000")
         self.assertTrue(bridge.commands[1].startswith("GET_HISTORY "))
+
+    def test_diagnosis_rejects_non_boolean_llm_option_before_device_access(self) -> None:
+        for value in ('false', 1, None, {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'include_llm'):
+                self.server.call_tool(None, 'diagnose_device', {'include_llm': value})
 
     def test_history_rejects_reversed_window(self) -> None:
         with self.assertRaisesRegex(ValueError, "through_unix_ms"):
@@ -401,6 +409,35 @@ class McpServerTests(unittest.TestCase):
             "SET_ANGLE 30 -10 5000 0.5",
         ])
         self.assertEqual(result["telemetry"]["tilt_degrees"], -10)
+
+    def test_instruction_preview_never_accesses_device(self) -> None:
+        result = self.server.call_tool(None, 'execute_instruction', {
+            'instruction': 'Pan 30도 Tilt -10도 이동', 'preview_only': True})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['commands'], [
+            'POWER_ON 3000', 'INITIALIZE 5000', 'SET_ANGLE 30 -10 5000 0.5'])
+        self.assertEqual(result['actions_taken'], [])
+
+    def test_negated_ambiguous_and_conflicting_requests_never_access_device(self) -> None:
+        for instruction in ('고장 해제하지 말고 상태 확인', '전원 끄지마',
+                            "don't power off", 'no power off',
+                            '연결 해제', 'MotorStall 주입하고 고장 해제',
+                            'MotorStall SensorFailure 주입',
+                            '전원 off Pan 30 Tilt 10', '진단하고 전원 켜줘'):
+            with self.subTest(instruction=instruction):
+                result = self.server.call_tool(None, 'execute_instruction', {'instruction': instruction})
+                self.assertFalse(result['ok'])
+
+    def test_duplicate_and_nonfinite_angles_never_access_device(self) -> None:
+        for instruction in ('Pan 30 Pan 40 Tilt 10', 'Pan 1e309 Tilt 0', 'Pan 1e3 Tilt 0'):
+            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+                self.server.call_tool(None, 'execute_instruction', {'instruction': instruction})
+
+    def test_recovery_question_routes_to_read_only_diagnosis(self) -> None:
+        with patch.object(self.server, '_diagnose_device', return_value={'ok': True}) as diagnose:
+            result = self.server.call_tool(None, 'execute_instruction', {'instruction': '고장 복구 방법 알려줘'})
+            self.assertTrue(result['ok'])
+            diagnose.assert_called_once_with(None, 2000, 20, False)
 
     def test_natural_language_rejects_incomplete_angle(self) -> None:
         class FakeBridge:
