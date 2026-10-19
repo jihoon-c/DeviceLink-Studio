@@ -6,6 +6,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -107,29 +108,51 @@ class DemoSession:
             stream.write(json.dumps(event, ensure_ascii=False) + '\n')
         self.emit(event)
 
-    def preflight(self) -> dict[str, Any]:
+    def preflight(self, *, include_llm: bool = False) -> dict[str, Any]:
         mfc_candidates = [self.root / name / 'DeviceLinkMfcHost.exe'
                           for name in ('build-demo', 'build-mfc-host-ninja', 'build-mfc-host', 'build-agent-diag')]
         runtime = self.root / 'artifacts' / 'local-llm'
         ollama_candidates = sorted(runtime.glob('ollama-v*/ollama.exe'), reverse=True)
-        config = settings()
-        if config['provider'] != 'local':
-            raise RuntimeError('시범운영은 로컬 LLM 설정이 필요합니다. Setup-LocalDiagnosticLlm.ps1을 실행하세요.')
-        if config['base_url'].rstrip('/') != 'http://127.0.0.1:11434/v1':
-            raise RuntimeError('시범운영 모델 주소는 http://127.0.0.1:11434/v1로 설정하세요.')
+        config = {'model': None}
+        if include_llm:
+            config = settings()
+            if config['provider'] != 'local' or config['base_url'].rstrip('/') != 'http://127.0.0.1:11434/v1':
+                raise RuntimeError('로컬 LLM 주소를 http://127.0.0.1:11434/v1로 설정하세요.')
         paths = {
             'mfc': next((path for path in mfc_candidates if path.is_file()), mfc_candidates[0]),
             'bridge': server.Bridge._find_executable(),
-            'ollama': ollama_candidates[0] if ollama_candidates else runtime / 'ollama-v0.40.5' / 'ollama.exe',
             'unreal': Path(os.environ.get('DEVICELINK_UNREAL_EDITOR', r'F:\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe')),
             'project': self.root / 'UnrealVirtualDevice' / 'UnrealVirtualDevice.uproject',
             'module': self.root / 'UnrealVirtualDevice' / 'Binaries' / 'Win64' / 'UnrealEditor-UnrealVirtualDevice.dll',
         }
+        # An explicit package override must fail clearly if broken; never silently
+        # substitute an editor for a requested deployment executable.
+        package_override = os.environ.get('DEVICELINK_UNREAL_PACKAGE')
+        package = (Path(package_override) if package_override else
+                   self.root / 'artifacts' / 'package' / 'Windows' / 'UnrealVirtualDevice.exe')
+        packaged = bool(package_override) or package.is_file()
+        device_map = '/Game/Maps/DeviceLinkLab'
+        if packaged:
+            paths['unreal'] = package
+            del paths['project']
+            del paths['module']
+            manifest = package.parent / 'devicelink-package.json'
+            if manifest.is_file():
+                if manifest.stat().st_size > 8192:
+                    raise RuntimeError('가상장비 패키지 설정 파일이 너무 큽니다.')
+                try:
+                    device_map = json.loads(manifest.read_text(encoding='utf-8-sig'))['map']
+                except (ValueError, KeyError, TypeError) as error:
+                    raise RuntimeError('가상장비 패키지 맵 설정을 확인하세요.') from error
+                if not isinstance(device_map, str) or not re.fullmatch(r'/Game/[A-Za-z0-9_/]+', device_map):
+                    raise RuntimeError('가상장비 패키지 맵 설정을 확인하세요.')
+        if include_llm:
+            paths['ollama'] = ollama_candidates[0] if ollama_candidates else runtime / 'ollama-v0.40.5' / 'ollama.exe'
         missing = [str(path) for path in paths.values() if not path.is_file()]
         if missing:
             raise RuntimeError('필수 파일이 없습니다:\n' + '\n'.join(missing) +
                                '\nREADME의 최초 준비 및 Build-DemoLauncher.ps1을 확인하세요.')
-        return {'paths': paths, 'model': config['model']}
+        return {'paths': paths, 'model': config['model'], 'packaged': packaged, 'map': device_map}
 
     def _spawn(self, component: str, args: list[str], *, hidden: bool,
                environment: dict[str, str] | None = None) -> subprocess.Popen:
@@ -199,14 +222,15 @@ class DemoSession:
                 raise RuntimeError('시범운영 준비를 취소했습니다.')
             self._event('startup', '필수 파일과 설정 확인 중')
             configuration = self.preflight()
-            self._ensure_llm(configuration)
             if self.cancel.is_set():
                 raise RuntimeError('시범운영 준비를 취소했습니다.')
             if self.platform.port_open(5000):
                 self._event('unreal', '기존 TCP 5000 가상장비 연결 확인 중')
             else:
-                args = [str(configuration['paths']['unreal']), str(configuration['paths']['project']),
-                        '/Game/Maps/DeviceLinkLab', '-game', '-DeviceLinkAutoStart', '-DeviceLinkPort=5000',
+                args = [str(configuration['paths']['unreal'])]
+                if not configuration.get('packaged', False):
+                    args += [str(configuration['paths']['project'])]
+                args += [configuration.get('map', '/Game/Maps/DeviceLinkLab'), '-game', '-DeviceLinkAutoStart', '-DeviceLinkPort=5000',
                         '-abslog=' + str(self.directory / 'unreal.log')]
                 args += ['-nullrhi', '-unattended', '-nosplash', '-nosound'] if hidden or not visual_device else [
                     '-windowed', '-ResX=1280', '-ResY=720',
@@ -253,6 +277,10 @@ class DemoSession:
 
             self._event('mfc', '관제 콘솔 시작 및 자동 연결 중')
             self._wait(mfc_ready, 30, mfc)
+            if not hidden:
+                # MFC owns the operating session after startup. Keep a bridge only for hidden integration tests.
+                self.bridge.close()
+                self.bridge = None
             self._event('mfc', '관제 콘솔 연결 완료: 127.0.0.1:5000', 'ready')
             self.ready = True
             result = {'ok': True, 'state': 'ready', 'telemetry': observed.get('telemetry'),
@@ -272,15 +300,15 @@ class DemoSession:
         self._event('diagnosis', '새 Telemetry·이벤트·매뉴얼로 진단 중')
         return self._call('diagnose_device', {'include_llm': include_llm})
 
-    def fault_demo(self) -> dict[str, Any]:
+    def fault_demo(self, *, include_llm: bool = True) -> dict[str, Any]:
         if not self.ready:
             raise RuntimeError('시범운영 준비가 먼저 필요합니다.')
         self._event('diagnosis', 'MotorStall 주입 → 진단 → 해제 → 재검증')
         self._call('inject_fault', {'fault': 'MotorStall'})
         diagnosis = None
         try:
-            diagnosis = self.diagnose(include_llm=True)
-            if diagnosis.get('llm_explanation', {}).get('status') != 'generated':
+            diagnosis = self.diagnose(include_llm=include_llm)
+            if include_llm and diagnosis.get('llm_explanation', {}).get('status') != 'generated':
                 raise RuntimeError('LLM 설명이 생성되지 않았습니다: ' +
                                    str(diagnosis.get('llm_explanation', {})))
             before = self._call('verify_diagnosis', {'diagnosis_id': diagnosis['diagnosis_id']})

@@ -64,6 +64,43 @@ class DemoLauncherTests(unittest.TestCase):
         self.configuration = {'model': 'test-local-model', 'paths': {
             name: self.root / (name + '.exe') for name in ('mfc', 'bridge', 'unreal', 'project', 'ollama')}}
 
+    def test_packaged_preflight_needs_no_editor_or_model(self) -> None:
+        package = self.root / 'artifacts/package/Windows/UnrealVirtualDevice.exe'
+        mfc = self.root / 'build-demo/DeviceLinkMfcHost.exe'
+        for file in (package, mfc):
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.touch()
+        (package.parent / 'devicelink-package.json').write_text(
+            json.dumps({'map': '/Game/Maps/MinimalDemo'}), encoding='utf-8')
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(demo_runtime.server.Bridge, '_find_executable', return_value=mfc), \
+             patch.object(demo_runtime, 'settings', side_effect=AssertionError('Model consulted')):
+            config = self.session.preflight()
+        self.assertTrue(config['packaged'])
+        self.assertEqual(config['map'], '/Game/Maps/MinimalDemo')
+        self.assertEqual(config['paths']['unreal'], package)
+        self.assertNotIn('project', config['paths'])
+        self.assertNotIn('module', config['paths'])
+
+    def test_invalid_explicit_package_does_not_fall_back(self) -> None:
+        with patch.dict(os.environ, {'DEVICELINK_UNREAL_PACKAGE': str(self.root / 'missing.exe')}), \
+             patch.object(demo_runtime.server.Bridge, '_find_executable', return_value=Path(__file__)):
+            with self.assertRaisesRegex(RuntimeError, 'missing.exe'):
+                self.session.preflight()
+
+    def test_packaged_start_uses_selected_map_without_project_argument(self) -> None:
+        self.configuration.update(packaged=True, map='/Game/Maps/MinimalDemo')
+        del self.configuration['paths']['project']
+        self.platform.ports[5000] = False
+        with patch.object(self.session, 'preflight', return_value=self.configuration), \
+             patch.object(demo_runtime.server, 'Bridge'), \
+             patch.object(demo_runtime.server, 'call_tool', return_value={'ok': True}):
+            self.session.start(hidden=True)
+            args = self.platform.launched[0][0]
+            self.assertEqual(args[1], '/Game/Maps/MinimalDemo')
+            self.assertFalse(any(arg.endswith('.uproject') for arg in args))
+            self.session.stop()
+
     def test_reuses_servers_and_stops_only_owned_mfc(self) -> None:
         bridge = MagicMock()
         with patch.object(self.session, 'preflight', return_value=self.configuration), \
@@ -136,12 +173,15 @@ class DemoLauncherTests(unittest.TestCase):
                 index for index, name in enumerate(calls) if name == 'get_telemetry'))
             self.session.stop()
 
-    def test_busy_model_port_does_not_spawn_duplicate_server(self) -> None:
+    def test_basic_start_does_not_require_or_contact_model(self) -> None:
         self.platform.model_available = False
-        with patch.object(self.session, 'preflight', return_value=self.configuration):
-            with self.assertRaisesRegex(RuntimeError, '11434'):
-                self.session.start(hidden=True)
-        self.assertEqual(self.platform.launched, [])
+        with patch.object(self.session, 'preflight', return_value=self.configuration), \
+             patch.object(demo_runtime.server, 'Bridge'), \
+             patch.object(demo_runtime.server, 'call_tool', return_value={'ok': True}), \
+             patch.object(self.platform, 'http_json', side_effect=AssertionError('No model call permitted')):
+            self.assertTrue(self.session.start(hidden=True)['ok'])
+            self.assertEqual(len(self.platform.launched), 1)
+            self.session.stop()
 
     def test_cancel_stops_readiness_wait(self) -> None:
         self.session.cancel.set()
@@ -177,14 +217,17 @@ class DemoLauncherTests(unittest.TestCase):
                 fault = False
             if name == 'diagnose_device':
                 return {'ok': True, 'diagnosis_id': 'a' * 32,
-                        'llm_explanation': {'status': 'generated'}}
+                        'llm_explanation': {'status': 'generated' if arguments['include_llm'] else 'skipped_disabled'}}
             if name == 'verify_diagnosis':
                 return {'ok': True, 'verdict': 'FAIL' if fault else 'PASS', 'report': {'status': 'saved'}}
             return {'ok': True}
 
         with patch.object(demo_runtime.server, 'call_tool', side_effect=call):
-            result = self.session.fault_demo()
-        self.assertEqual((result['before'], result['after']), ('FAIL', 'PASS'))
+            for include_llm in (True, False):
+                result = self.session.fault_demo(include_llm=include_llm)
+                self.assertEqual((result['before'], result['after']), ('FAIL', 'PASS'))
+                self.assertEqual(result['diagnosis']['llm_explanation']['status'],
+                                 'generated' if include_llm else 'skipped_disabled')
 
     @unittest.skipUnless(os.name == 'nt', 'Windows job ownership test')
     def test_owned_process_job_closes_descendant_process(self) -> None:
