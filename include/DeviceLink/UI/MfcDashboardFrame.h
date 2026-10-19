@@ -54,6 +54,10 @@ public:
     CancelRequestButtonId,
     DiagnoseRequestButtonId,
     WorkspaceTabId,
+    IncludeLlmCheckId,
+    VerifyRequestButtonId,
+    OpenDiagnosticReportButtonId,
+    BrowseDiagnosticReportsButtonId,
   };
 
   MfcDashboardFrame(
@@ -110,6 +114,9 @@ protected:
   afx_msg void OnExecuteRequest();
   afx_msg void OnCancelRequest();
   afx_msg void OnDiagnoseRequest();
+  afx_msg void OnVerifyRequest();
+  afx_msg void OnOpenDiagnosticReport();
+  afx_msg void OnBrowseDiagnosticReports();
   afx_msg LRESULT OnRequestProgress(WPARAM, LPARAM);
   DECLARE_MESSAGE_MAP()
 
@@ -153,6 +160,10 @@ private:
   CButton m_executeRequestButton;
   CButton m_cancelRequestButton;
   CButton m_diagnoseRequestButton;
+  CButton m_includeLlmCheck;
+  CButton m_verifyRequestButton;
+  CButton m_openDiagnosticReportButton;
+  CButton m_browseDiagnosticReportsButton;
   CString m_previewedInstruction;
   DashboardModel m_dashboardModel;
   std::unique_ptr<DashboardBinding> m_dashboardBinding;

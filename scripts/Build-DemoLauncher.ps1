@@ -25,6 +25,7 @@ New-Item -ItemType Directory -Path $buildDirectory -Force | Out-Null
 $batch = Join-Path $buildDirectory 'build-demo.cmd'
 $commands = @(
     '@echo off',
+    'chcp 65001 >nul',
     'set VSLANG=1033',
     ('call "{0}" >nul' -f $vcvars),
     'if errorlevel 1 exit /b 1',

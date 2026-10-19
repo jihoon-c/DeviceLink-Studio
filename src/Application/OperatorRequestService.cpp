@@ -9,7 +9,8 @@
 
 namespace DeviceLink::Application
 {
-OperatorRequestService::OperatorRequestService(Execute execute) : m_execute(std::move(execute)) {}
+OperatorRequestService::OperatorRequestService(Execute execute, Explain explain, std::filesystem::path reportDirectory)
+    : m_execute(std::move(execute)), m_explain(std::move(explain)), m_reportDirectory(std::move(reportDirectory)) {}
 OperatorRequestService::~OperatorRequestService() { Stop(); }
 
 OperatorRequestPlan OperatorRequestService::Plan(std::wstring text)
@@ -20,6 +21,8 @@ OperatorRequestPlan OperatorRequestService::Plan(std::wstring text)
     if (std::regex_search(text, std::wregex(LR"(하지|말고|말아|빼고|제외|대신|지\s*마|않|금지|안\s*(해|하|켜|끄|이동|복구)|\b(no|not|never|without|except)\b|don't)")))
         return {false, L"부정·제외 조건은 자동 실행하지 않습니다. 수행할 동작만 명확히 입력하세요."};
     if (has(L"연결") || has(L"connect")) return {false, L"연결은 상단 연결 버튼을 사용하세요."};
+    if (text == L"복구 검증" || text == L"verify recovery")
+        return {true, L"최근 진단과 같은 장비의 새 Telemetry 비교 (장비 변경 없음)", {{OperatorRequestAction::Verify}}};
     const bool diagnose = has(L"진단") || has(L"원인") || has(L"방법") || has(L"절차") || has(L"diagnos");
     const bool on = has(L"전원 켜") || has(L"전원 on") || has(L"power on");
     const bool off = has(L"전원 끄") || has(L"전원 off") || has(L"power off");
@@ -30,7 +33,7 @@ OperatorRequestPlan OperatorRequestService::Plan(std::wstring text)
         return {false, L"고장 주입·시나리오·Replay는 시험 탭을 사용하세요."};
     if ((off && (on || initialize || angle || clear)) || (diagnose && (on || off || initialize || angle || (clear && !has(L"방법") && !has(L"절차")))))
         return {false, L"상충 명령이나 진단 질문과 제어 동작은 나누어 요청하세요."};
-    if (diagnose) return {true, L"관측 진단: 새 Telemetry의 상태·고장 확인 (장비 변경 없음, LLM 미사용)", {{OperatorRequestAction::Diagnose}}};
+    if (diagnose) return {true, L"관측 진단: 새 Telemetry·매뉴얼 근거·보고서 (AI 설명은 선택, 장비 변경 없음)", {{OperatorRequestAction::Diagnose}}};
     OperatorRequestPlan result{true, L"실행 계획:"};
     if (off) return {true, L"전원 OFF → 새 상태 응답 확인", {{OperatorRequestAction::PowerOff}}};
     if (on) { result.steps.push_back({OperatorRequestAction::PowerOn}); result.description += L"\r\n· 전원 ON 및 응답 확인"; }
@@ -63,15 +66,15 @@ OperatorRequestPlan OperatorRequestService::Plan(std::wstring text)
     return result;
 }
 
-bool OperatorRequestService::Submit(OperatorRequestPlan plan)
+bool OperatorRequestService::Submit(OperatorRequestPlan plan, bool includeLlm)
 {
     if (!plan.valid || plan.steps.empty() || plan.steps.size() > 8) return false;
     for (const auto& step : plan.steps)
-        if (static_cast<int>(step.action) < 0 || step.action > OperatorRequestAction::ClearFault ||
+        if (static_cast<int>(step.action) < 0 || step.action > OperatorRequestAction::Verify ||
             (step.action == OperatorRequestAction::Move && (!std::isfinite(step.pan) || !std::isfinite(step.tilt) ||
             step.pan < -170 || step.pan > 170 || step.tilt < -45 || step.tilt > 80))) return false;
     if (m_running.exchange(true)) return false;
-    try { m_worker = std::jthread([this, plan = std::move(plan)](std::stop_token stop) {
+    try { m_worker = std::jthread([this, plan = std::move(plan), includeLlm](std::stop_token stop) {
         try
         {
             for (const auto& step : plan.steps)
@@ -95,6 +98,14 @@ bool OperatorRequestService::Submit(OperatorRequestPlan plan)
                 }
                 Publish(std::move(message));
                 if (!result.succeeded) break;
+                if (m_explain && (step.action == OperatorRequestAction::Diagnose || step.action == OperatorRequestAction::Verify))
+                {
+                    Publish(includeLlm && step.action == OperatorRequestAction::Diagnose ?
+                        L"매뉴얼·보고서와 선택한 로컬 AI 설명을 준비합니다… 중지 버튼으로 취소할 수 있습니다." : L"매뉴얼 근거·보고서를 처리합니다…");
+                    const auto details = m_explain(result, includeLlm, step.action == OperatorRequestAction::Verify, stop);
+                    if (!details.reportPath.empty()) { std::scoped_lock lock(m_mutex); m_lastReportPath = details.reportPath; }
+                    Publish(details.text);
+                }
             }
         }
         catch (const std::exception&) { Publish(L"[실패] 요청 처리 중 오류가 발생했습니다."); }
@@ -109,6 +120,8 @@ void OperatorRequestService::Stop() noexcept { Cancel(); if (m_worker.joinable()
 bool OperatorRequestService::IsRunning() const noexcept { return m_running.load(); }
 void OperatorRequestService::SetWakeupHandler(Wakeup handler) { std::scoped_lock lock(m_mutex); m_wakeup = std::move(handler); }
 std::vector<std::wstring> OperatorRequestService::Drain() { std::scoped_lock lock(m_mutex); auto result = std::move(m_results); m_results.clear(); return result; }
+std::filesystem::path OperatorRequestService::LastReportPath() const { std::scoped_lock lock(m_mutex); return m_lastReportPath; }
+const std::filesystem::path& OperatorRequestService::ReportDirectory() const noexcept { return m_reportDirectory; }
 void OperatorRequestService::Publish(std::wstring message)
 {
     Wakeup wakeup;

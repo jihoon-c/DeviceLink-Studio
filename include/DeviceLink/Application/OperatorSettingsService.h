@@ -13,7 +13,7 @@ struct OperatorSettings final
     std::string host{"127.0.0.1"};
     std::uint16_t port{5000};
     bool automaticReconnect{true};
-    std::string scenarioPath{"..\\scenarios\\unreal-gimbal-demo.dls"};
+    std::string scenarioPath{"scenarios\\unreal-gimbal-demo.dls"};
     std::string historyDeviceId{"unreal-gimbal-01"};
     std::uint8_t historyCategoryIndex{};
     std::string historySearchText;

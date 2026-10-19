@@ -1,6 +1,7 @@
 #include "DeviceLink/Application/OperatorRequestService.h"
 
 #include <chrono>
+#include <algorithm>
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
@@ -66,6 +67,35 @@ void RunningRequestRejectsDuplicatesAndCancelsRemainingSteps()
     service.Stop();
     Require(started && !duplicate && actions == 1 && !service.IsRunning(), "Duplicate or cancelled step was executed");
 }
+
+void DiagnosticWorkerPublishesReportAndPropagatesOptions()
+{
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::vector<std::pair<bool, bool>> options;
+    OperatorRequestService service([](const OperatorRequestStep& step) {
+        Require(step.action == OperatorRequestAction::Diagnose || step.action == OperatorRequestAction::Verify,
+            "Diagnostic request changed equipment");
+        AgentOperationResult observation{true, "fixture telemetry"};
+        observation.telemetry = VirtualGimbalTelemetry{};
+        return observation;
+    }, [&](const AgentOperationResult& observation, bool llm, bool verify, std::stop_token stop) {
+        Require(observation.telemetry.has_value() && stop.stop_possible(), "Worker lost observation or cancellation");
+        options.emplace_back(llm, verify);
+        return OperatorDiagnosticDetails{L"cited report", L"reports/fixture.md"};
+    }, L"reports");
+    service.SetWakeupHandler([&] { std::scoped_lock lock(mutex); condition.notify_all(); });
+    for (const auto* instruction : {L"고장 진단", L"복구 검증"})
+    {
+        Require(service.Submit(OperatorRequestService::Plan(instruction), options.empty()), "Diagnosis submit failed");
+        { std::unique_lock lock(mutex); Require(condition.wait_for(lock, 3s, [&] { return !service.IsRunning(); }), "Diagnosis did not finish"); }
+        service.Stop();
+    }
+    Require(options == std::vector<std::pair<bool, bool>>{{true, false}, {false, true}}, "AI/verification options differ");
+    Require(service.LastReportPath() == L"reports/fixture.md" && service.ReportDirectory() == L"reports", "Report path lost");
+    const auto messages = service.Drain();
+    Require(std::find(messages.begin(), messages.end(), L"cited report") != messages.end(), "Diagnostic text was not queued");
+}
 }
 
 int main()
@@ -75,6 +105,7 @@ int main()
         RequestsAreValidatedBeforeExecution();
         FailureStopsCompoundRequestAndPublishesResults();
         RunningRequestRejectsDuplicatesAndCancelsRemainingSteps();
+        DiagnosticWorkerPublishesReportAndPropagatesOptions();
         std::cout << "Operator request tests passed\n";
         return 0;
     }

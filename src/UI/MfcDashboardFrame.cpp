@@ -211,6 +211,9 @@ BEGIN_MESSAGE_MAP(MfcDashboardFrame, CFrameWnd)
     ON_BN_CLICKED(MfcDashboardFrame::ExecuteRequestButtonId, &MfcDashboardFrame::OnExecuteRequest)
     ON_BN_CLICKED(MfcDashboardFrame::CancelRequestButtonId, &MfcDashboardFrame::OnCancelRequest)
     ON_BN_CLICKED(MfcDashboardFrame::DiagnoseRequestButtonId, &MfcDashboardFrame::OnDiagnoseRequest)
+    ON_BN_CLICKED(MfcDashboardFrame::VerifyRequestButtonId, &MfcDashboardFrame::OnVerifyRequest)
+    ON_BN_CLICKED(MfcDashboardFrame::OpenDiagnosticReportButtonId, &MfcDashboardFrame::OnOpenDiagnosticReport)
+    ON_BN_CLICKED(MfcDashboardFrame::BrowseDiagnosticReportsButtonId, &MfcDashboardFrame::OnBrowseDiagnosticReports)
 END_MESSAGE_MAP()
 
 MfcDashboardFrame::MfcDashboardFrame(
@@ -396,7 +399,14 @@ bool MfcDashboardFrame::CreateControls()
         !m_previewRequestButton.Create(L"미리보기", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, PreviewRequestButtonId) ||
         !m_executeRequestButton.Create(L"실행", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, ExecuteRequestButtonId) ||
         !m_cancelRequestButton.Create(L"요청 중지", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, CancelRequestButtonId) ||
-        !m_diagnoseRequestButton.Create(L"현재 상태 진단", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, DiagnoseRequestButtonId)) return false;
+        !m_diagnoseRequestButton.Create(L"현재 상태 진단", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, DiagnoseRequestButtonId) ||
+        !m_includeLlmCheck.Create(L"AI 설명 추가 (선택 · 로컬 모델)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            CRect(0, 0, 10, 10), this, IncludeLlmCheckId) ||
+        !m_verifyRequestButton.Create(L"복구 검증", buttonStyle | WS_TABSTOP, CRect(0, 0, 10, 10), this, VerifyRequestButtonId) ||
+        !m_openDiagnosticReportButton.Create(L"최근 보고서", buttonStyle | WS_TABSTOP,
+            CRect(0, 0, 10, 10), this, OpenDiagnosticReportButtonId) ||
+        !m_browseDiagnosticReportsButton.Create(L"보고서 선택", buttonStyle | WS_TABSTOP,
+            CRect(0, 0, 10, 10), this, BrowseDiagnosticReportsButtonId)) return false;
     m_workspaceTabs.InsertItem(0, L"운용");
     m_workspaceTabs.InsertItem(1, L"시험 / 설정");
     m_workspaceTabs.InsertItem(2, L"이력 / 패킷");
@@ -404,14 +414,14 @@ bool MfcDashboardFrame::CreateControls()
     m_requestEdit.SetLimitText(1024);
     m_requestEdit.SetWindowText(L"현재 상태 확인");
     m_requestOutput.SetLimitText(50000);
-    m_requestOutput.SetWindowText(L"규칙 기반 관측 진단 · LLM 미사용\r\n\r\n자연어 요청은 같은 장비 연결과 Application 서비스를 사용합니다.");
+    m_requestOutput.SetWindowText(L"기본: 규칙 기반 진단·매뉴얼 근거·보고서\r\nAI 설명은 체크한 경우에만 모델을 준비합니다.\r\n\r\n진단 → 조치 → 복구 검증으로 같은 장비의 새 상태를 비교합니다.");
     m_velocityModeButton.SetCheck(BST_CHECKED);
     m_joystick.SetMode(JoystickMode::Velocity);
     m_hostEdit.SetWindowText(L"127.0.0.1");
     m_portEdit.SetWindowText(L"5000");
     m_panEdit.SetWindowText(L"45.0");
     m_tiltEdit.SetWindowText(L"10.0");
-    m_scenarioPathEdit.SetWindowText(L"..\\scenarios\\unreal-gimbal-demo.dls");
+    m_scenarioPathEdit.SetWindowText(L"scenarios\\unreal-gimbal-demo.dls");
     m_historyDeviceEdit.SetWindowText(L"unreal-gimbal-01");
     m_historyCategoryCombo.AddString(L"전체 종류");
     m_equipmentModeCombo.AddString(L"고정카메라 관제 모드");
@@ -487,6 +497,7 @@ void MfcDashboardFrame::UpdateFonts()
     controls.push_back(&m_cameraViewCheck);
     controls.insert(controls.end(), {&m_workspaceTabs, &m_requestEdit, &m_requestOutput, &m_requestHelp,
         &m_previewRequestButton, &m_executeRequestButton, &m_cancelRequestButton, &m_diagnoseRequestButton});
+    controls.insert(controls.end(), {&m_includeLlmCheck, &m_verifyRequestButton, &m_openDiagnosticReportButton, &m_browseDiagnosticReportsButton});
     controls.push_back(&m_joystickSpeedStatus);
     for (CWnd* control : controls)
     {
@@ -529,9 +540,13 @@ void MfcDashboardFrame::LayoutControls(int width, int height)
     move(m_requestEdit, 880, 263, 1245, 340);
     move(m_previewRequestButton, 880, 350, 990, 385); move(m_executeRequestButton, 1000, 350, 1100, 385);
     move(m_cancelRequestButton, 1110, 350, 1245, 385);
-    move(m_diagnoseRequestButton, 880, 398, 1245, 433);
-    move(m_requestHelp, 880, 446, 1245, 505);
-    move(m_requestOutput, 880, 516, 1245, logicalHeight-25);
+    move(m_diagnoseRequestButton, 880, 398, 1055, 433);
+    move(m_verifyRequestButton, 1065, 398, 1245, 433);
+    move(m_includeLlmCheck, 880, 443, 1245, 470);
+    move(m_openDiagnosticReportButton, 880, 480, 1055, 515);
+    move(m_browseDiagnosticReportsButton, 1065, 480, 1245, 515);
+    move(m_requestHelp, 880, 525, 1245, 580);
+    move(m_requestOutput, 880, 590, 1245, logicalHeight-25);
     move(m_equipmentModeCombo, 50, 290, 350, 420);
     move(m_powerOnButton, 50, 345, 165, 382); move(m_powerOffButton, 175, 345, 290, 382);
     move(m_initializeButton, 300, 345, 415, 382);
@@ -688,7 +703,7 @@ void MfcDashboardFrame::OnExecuteRequest()
     }
     const auto plan = Application::OperatorRequestService::Plan(std::wstring(input.GetString()));
     m_joystick.Reset(); m_joystickPanAxis = 0; m_joystickTiltAxis = 0; m_positionTargetDirty = false;
-    if (m_requestService.Submit(plan))
+    if (m_requestService.Submit(plan, m_includeLlmCheck.GetCheck() == BST_CHECKED))
     {
         m_requestOutput.SetWindowText((plan.description + L"\r\n\r\n[처리 중] 실제 장비 응답을 기다립니다…\r\n").c_str());
         m_previewedInstruction.Empty();
@@ -709,6 +724,35 @@ void MfcDashboardFrame::OnDiagnoseRequest()
     m_requestEdit.SetWindowText(L"고장 진단");
     OnPreviewRequest();
     OnExecuteRequest();
+}
+
+void MfcDashboardFrame::OnVerifyRequest()
+{
+    if (m_requestService.IsRunning() || m_workflowService.IsRunning()) return;
+    m_requestEdit.SetWindowText(L"복구 검증");
+    OnPreviewRequest();
+    OnExecuteRequest();
+}
+
+void MfcDashboardFrame::OnOpenDiagnosticReport()
+{
+    const auto path = m_requestService.LastReportPath();
+    if (path.empty()) { m_requestOutput.SetWindowText(L"현재 상태 진단으로 먼저 보고서를 생성하세요."); return; }
+    const auto opened = reinterpret_cast<INT_PTR>(::ShellExecuteW(GetSafeHwnd(), L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    if (opened <= 32) SetOperationStatus(L"보고서 연결 프로그램을 확인하세요.", false);
+}
+
+void MfcDashboardFrame::OnBrowseDiagnosticReports()
+{
+    const auto directory = m_requestService.ReportDirectory().wstring();
+    CFileDialog dialog(TRUE, L"md", nullptr, OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR,
+        L"진단 보고서 (*.md;*.json)|*.md;*.json||", this);
+    dialog.m_ofn.lpstrInitialDir = directory.c_str();
+    if (dialog.DoModal() == IDOK)
+    {
+        const auto opened = reinterpret_cast<INT_PTR>(::ShellExecuteW(GetSafeHwnd(), L"open", dialog.GetPathName(), nullptr, nullptr, SW_SHOWNORMAL));
+        if (opened <= 32) SetOperationStatus(L"보고서 연결 프로그램을 확인하세요.", false);
+    }
 }
 
 LRESULT MfcDashboardFrame::OnRequestProgress(WPARAM, LPARAM)
@@ -1388,6 +1432,9 @@ void MfcDashboardFrame::UpdateCommandAvailability()
     m_executeRequestButton.EnableWindow(connected && fixedCameraMode && !requestRunning && !workflowRunning);
     m_diagnoseRequestButton.EnableWindow(connected && fixedCameraMode && !requestRunning && !workflowRunning);
     m_cancelRequestButton.EnableWindow(requestRunning);
+    m_includeLlmCheck.EnableWindow(!requestRunning);
+    m_verifyRequestButton.EnableWindow(connected && fixedCameraMode && !requestRunning && !workflowRunning && !m_requestService.LastReportPath().empty());
+    m_openDiagnosticReportButton.EnableWindow(!m_requestService.LastReportPath().empty());
     m_equipmentModeCombo.EnableWindow(!requestRunning && !workflowRunning);
     if (requestRunning)
     {

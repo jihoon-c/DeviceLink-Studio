@@ -6,6 +6,8 @@
 #include "DeviceLink/Application/VirtualGimbalService.h"
 #include "DeviceLink/Application/DeviceAgentService.h"
 #include "DeviceLink/Application/OperatorRequestService.h"
+#include "DeviceLink/Application/DiagnosticSnapshot.h"
+#include "DeviceLink/Infrastructure/PythonDiagnosticClient.h"
 #include "DeviceLink/Infrastructure/AtomicTextFileStore.h"
 #include "DeviceLink/Infrastructure/SqliteEventRepository.h"
 #include "DeviceLink/Transport/TcpTransport.h"
@@ -20,6 +22,7 @@
 #include <string_view>
 #include <string>
 #include <vector>
+#include <array>
 
 namespace
 {
@@ -34,6 +37,31 @@ std::int64_t CurrentUnixMilliseconds()
         .count();
 }
 
+std::filesystem::path ProjectRoot()
+{
+    std::array<wchar_t, 32768> executable{};
+    const auto length = ::GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (length > 0 && length < executable.size())
+    {
+        auto directory = std::filesystem::path(executable.data()).parent_path();
+        for (int index = 0; index < 4; ++index)
+        {
+            if (std::filesystem::is_directory(directory / L"mcp_server")) return directory;
+            directory = directory.parent_path();
+        }
+    }
+    return std::filesystem::current_path();
+}
+
+std::wstring DiagnosticText(const std::string& text)
+{
+    const int count = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (count <= 0) return L"진단 결과의 UTF-8 형식을 확인하세요.";
+    std::wstring result(static_cast<std::size_t>(count), L'\0');
+    ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), count);
+    return result;
+}
+
 } // namespace
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int commandShow)
@@ -41,6 +69,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int comm
     const std::wstring_view arguments(commandLine);
     const bool demoHidden = arguments == L"--demo-hidden";
     const bool demo = demoHidden || arguments == L"--demo";
+    const auto projectRoot = ProjectRoot();
+    std::filesystem::current_path(projectRoot);
     // Per-monitor V2 keeps Win32 non-client areas and child controls sharp when
     // the dashboard moves between displays with different scale factors.
     static_cast<void>(::SetProcessDpiAwarenessContext(
@@ -80,6 +110,15 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int comm
         replayRepository, [&runtime] { runtime.FlushEventLog(); });
     DeviceLink::Application::OperatorSettingsService settingsService(
         scenarioFileStore, demo ? L"artifacts/demo/mfc.settings" : L"DeviceLinkStudio.settings");
+    if (!demo)
+    {
+        auto loaded = settingsService.Load();
+        if (loaded.loaded && loaded.settings.scenarioPath == "..\\scenarios\\unreal-gimbal-demo.dls")
+        {
+            loaded.settings.scenarioPath = "scenarios\\unreal-gimbal-demo.dls";
+            if (!settingsService.Save(loaded.settings).succeeded) return 1;
+        }
+    }
     if (demo)
     {
         DeviceLink::Application::OperatorSettings initial;
@@ -88,12 +127,14 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int comm
     }
 
     DeviceLink::Application::DeviceAgentService requestAgent(runtime.Devices(), gimbalService);
+    DeviceLink::Infrastructure::PythonDiagnosticClient diagnosticClient(projectRoot);
     DeviceLink::Application::OperatorRequestService requestService([&requestAgent](const auto& step) {
         using Action = DeviceLink::Application::OperatorRequestAction;
         switch (step.action)
         {
         case Action::Status:
-        case Action::Diagnose: return requestAgent.GetTelemetry();
+        case Action::Diagnose:
+        case Action::Verify: return requestAgent.GetTelemetry();
         case Action::PowerOn: return requestAgent.SetPower(true);
         case Action::PowerOff: return requestAgent.SetPower(false);
         case Action::Initialize: return requestAgent.Initialize();
@@ -101,7 +142,14 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int comm
         case Action::ClearFault: return requestAgent.ClearFault();
         }
         return DeviceLink::Application::AgentOperationResult{false, "Unsupported action"};
-    });
+    }, [&requestAgent, &diagnosticClient](const auto& observation, bool includeLlm, bool verify, std::stop_token stop) {
+        if (verify && diagnosticClient.LastDiagnosisId().empty())
+            return DeviceLink::Application::OperatorDiagnosticDetails{L"먼저 현재 고장을 진단해 기준 보고서를 생성하세요."};
+        const auto snapshot = DeviceLink::Application::SerializeDiagnosticSnapshot(observation,
+            requestAgent.RecentEvents(20), includeLlm, verify ? diagnosticClient.LastDiagnosisId() : "");
+        const auto result = diagnosticClient.Process(snapshot, stop);
+        return DeviceLink::Application::OperatorDiagnosticDetails{DiagnosticText(result.text), result.reportPath};
+    }, projectRoot / L"artifacts/demo/mfc-diagnostics/reports");
     DeviceLink::UI::MfcDashboardFrame dashboard(
         runtime, gimbalService, workflowService, eventLogQueryService, settingsService, requestService);
     if (!dashboard.CreateDashboard())

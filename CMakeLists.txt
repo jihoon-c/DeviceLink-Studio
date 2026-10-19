@@ -16,6 +16,7 @@ target_include_directories(SQLite3 PUBLIC
 
 add_library(DeviceLinkInfrastructure STATIC
     src/Infrastructure/AtomicTextFileStore.cpp
+    src/Infrastructure/PythonDiagnosticClient.cpp
     src/Infrastructure/AsyncLogger.cpp
     src/Infrastructure/AsyncEventStore.cpp
     src/Infrastructure/SqliteEventRepository.cpp
@@ -89,6 +90,7 @@ add_library(DeviceLinkApplication STATIC
     src/Application/AxisVapixCommandAdapter.cpp
     src/Application/CommunicationAlarmService.cpp
     src/Application/DeviceAgentService.cpp
+    src/Application/DiagnosticSnapshot.cpp
     src/Application/DeviceEventProcessingService.cpp
     src/Application/DeviceEventPersistence.cpp
     src/Application/DeviceEventQueue.cpp
@@ -174,7 +176,7 @@ if(DEVICELINK_BUILD_MFC_INTEGRATION)
     )
     target_compile_features(DeviceLinkMfcIntegration PUBLIC cxx_std_20)
     target_compile_definitions(DeviceLinkMfcIntegration PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _AFXDLL UNICODE _UNICODE)
-    target_link_libraries(DeviceLinkMfcIntegration PRIVATE DeviceLinkUI DeviceLinkApplication user32)
+    target_link_libraries(DeviceLinkMfcIntegration PRIVATE DeviceLinkUI DeviceLinkApplication user32 shell32)
 
     if(MSVC)
         target_compile_options(DeviceLinkMfcIntegration PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -190,7 +192,7 @@ if(DEVICELINK_BUILD_MFC_HOST)
     target_link_libraries(DeviceLinkMfcHost PRIVATE DeviceLinkMfcIntegration DeviceLinkApplication DeviceLinkInfrastructure DeviceLinkTransport user32 comctl32)
 
     if(MSVC)
-        target_compile_options(DeviceLinkMfcHost PRIVATE /W4 /permissive- /EHsc)
+        target_compile_options(DeviceLinkMfcHost PRIVATE /W4 /permissive- /EHsc /utf-8)
     endif()
 endif()
 
@@ -231,6 +233,12 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING)
+    add_executable(PythonDiagnosticClientTests tests/Infrastructure/PythonDiagnosticClientTests.cpp)
+    target_compile_features(PythonDiagnosticClientTests PRIVATE cxx_std_20)
+    target_link_libraries(PythonDiagnosticClientTests PRIVATE DeviceLinkApplication DeviceLinkInfrastructure)
+    add_test(NAME PythonDiagnosticClientTests COMMAND PythonDiagnosticClientTests ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(PythonDiagnosticClientTests PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(OperatorRequestTests tests/Application/OperatorRequestTests.cpp)
     target_compile_features(OperatorRequestTests PRIVATE cxx_std_20)
     target_link_libraries(OperatorRequestTests PRIVATE DeviceLinkApplication)
