@@ -2,142 +2,109 @@
 
 **Windows C++20 · MFC · Unreal Engine 5.8 · TCP · SQLite**
 
-가상 EO/IR 장비를 제어하고 통신 장애·고장 복구·자동 시험을 검증하는 SILS-like 테스트베드입니다. 통신 설계, 상태 전이, 멀티스레드 처리와 시험 자동화를 중심으로 구현합니다.
+가상 EO/IR 장비를 제어하고 통신 장애·고장 복구·자동 시험을 검증하는 SILS-like 테스트베드입니다. 통신 설계, 상태 전이, 멀티스레드와 시험 자동화를 중심으로 구현합니다.
 
-## 주요 기능
+## 기능
 
-- **장비 제어:** 전원·초기화·Pan/Tilt·Scan, 실제 각도·온도·전압 표시
-- **통신·복구:** 프레임·CRC16, 송수신 큐, 자동 재접속, Heartbeat 감시
-- **자동 시험:** 고장·응답 지연·무응답 주입, 시나리오·Record & Replay, PASS/FAIL 보고서
-- **운용 이력:** SQLite 이벤트·알람 저장 및 조회
-- **진단:** 새 Telemetry·매뉴얼 근거를 사용하는 규칙 기반 진단, 선택적 로컬 LLM 설명
-- **MFC 요청 패널:** 운용·시험/설정·이력/패킷 탭, 제한된 자연어 요청의 미리보기·실행·중지
-
-UI는 Application 서비스를 사용하고, worker 결과는 이벤트 큐와 `PostMessage`를 거쳐 UI 스레드에 전달합니다. Protocol은 패킷을 해석하고 Transport는 원시 바이트만 전송합니다.
-
-## 구조도
-
-주요 호출·데이터 흐름입니다. MFC와 C++ 브리지는 같은 Application 라이브러리를 사용하며, 각각의 실행 프로세스에서 장비에 연결합니다.
-
-```mermaid
-flowchart LR
-    MFC["MFC UI<br/>탭 · 자연어 요청 패널"] --> APP["C++ Application<br/>제어 · 상태 확인 · 자동 시험"]
-    PY["Python 운영 창 / MCP"] --> BRIDGE["C++ Agent Bridge"]
-    BRIDGE --> APP
-    APP --> CORE["Core<br/>세션 · 연결 상태"]
-    CORE --> PROTOCOL["Protocol<br/>프레이밍 · 파싱 · CRC16"]
-    CORE --> TRANSPORT["Transport<br/>TCP 원시 바이트 송수신"]
-    TRANSPORT <-->|"명령 · ACK · Telemetry"| UE["Unreal 가상장비<br/>짐벌 · 고장 재현"]
-    APP --> INFRA["Infrastructure<br/>SQLite · 파일 로그"]
-    PY --> DIAG["규칙 기반 진단<br/>관측 · 매뉴얼 근거"]
-    DIAG --> BRIDGE
-    DIAG --> MANUAL["샘플 매뉴얼<br/>Markdown / PDF"]
-    DIAG -.->|"선택적 설명"| LLM["Ollama / Qwen3 4B"]
-    DIAG --> REPORT["진단·검증 보고서<br/>JSON / Markdown"]
-```
-
-MFC 요청 패널은 현재 제어·관측 진단까지 연결되어 있습니다. Python의 매뉴얼·LLM·보고서 기능을 MFC에 연결하는 작업은 진행 중입니다.
+- 전원·초기화·Pan/Tilt·Scan 제어, Telemetry 및 Heartbeat 감시
+- 프레임·CRC16·송수신 큐·자동 재접속, 고장·지연·무응답 주입
+- 시나리오·Record & Replay, SQLite 이력·알람 및 PASS/FAIL 보고서
+- MFC 운용/시험/이력 탭, 제한된 자연어의 미리보기·실행·중지
+- MFC 진단·매뉴얼 인용·JSON/Markdown 보고서·복구 검증, 선택적 로컬 AI 설명
 
 ## 실행
 
-준비된 이 PC에서는 프로젝트 루트의 **`DeviceLinkDemo.exe`**를 실행합니다. 운영 창이 로컬 LLM·Unreal 가상장비·MFC를 준비하고 장비에 자동 연결합니다.
+준비된 이 PC에서는 루트의 **`DeviceLinkDemo.exe`**를 실행합니다.
 
-1. `시범운영 준비 완료`까지 기다립니다.
-2. MFC에서 장비를 조작하거나 `현재 상태 확인`, `Pan 30 Tilt -10`을 입력해 **미리보기 → 실행**합니다.
-3. 운영 창의 `MotorStall 고장 시연`으로 AI 진단과 복구 전후 FAIL→PASS를 확인합니다.
-4. 종료는 운영 창의 `시범운영 종료`를 사용합니다.
+1. 3D 화면 여부를 선택하고 시범운영을 시작합니다. 기본 시작에는 LLM이 필요하지 않습니다.
+2. MFC에서 조작하거나 `Pan 30 Tilt -10`을 **미리보기 → 실행**합니다.
+3. **현재 상태 진단**으로 근거·보고서를 확인합니다. AI가 필요하면 **AI 설명 추가**를 선택합니다.
+4. 명시적으로 복구한 뒤 **복구 검증**으로 동일 장비의 더 늦은 상태를 확인합니다.
+5. **최근 보고서 / 보고서 선택**으로 저장 파일을 열고, 런처에서 시범운영을 종료합니다.
 
-### 작업 절차 시퀀스
+로그·보고서는 `artifacts/demo/`에 저장됩니다. AI는 샘플 매뉴얼의 절차를 선택·설명하며 장비를 조작하지 않습니다. PASS는 관측 상태의 복구를 뜻합니다.
 
-준비·자연어 운용·고장 시연의 성공 경로입니다. 운영 창은 브리지를 통해, MFC는 프로세스 내부에서 Application을 호출합니다. 장비 명령·조회는 Protocol·Transport를 거칩니다.
+## 구조도
+
+```mermaid
+flowchart LR
+    UI["MFC UI"] --> APP["C++ Application<br/>제어 · 요청 worker · 시험"]
+    APP --> CORE["Core<br/>세션 · 상태"]
+    CORE --> PROTO["Protocol<br/>프레이밍 · CRC · 파싱"]
+    CORE --> TCP["Transport<br/>원시 바이트"]
+    TCP <--> UE["Unreal 가상장비"]
+    APP --> INFRA["Infrastructure<br/>SQLite · 파일 · Python 실행"]
+    INFRA --> DIAG["읽기 전용 관측 진단<br/>매뉴얼 · 보고서"]
+    DIAG -. "선택 시 준비·호출" .-> LLM["로컬 Ollama / Qwen3"]
+    MCP["MCP / CLI"] --> BRIDGE["C++ Bridge"] --> APP
+```
+
+MFC는 기존 장비 세션의 관측값을 Python helper에 전달합니다. worker 결과는 큐와 `PostMessage`를 거쳐 UI 스레드에 표시됩니다.
+
+## 작업 절차
 
 ```mermaid
 sequenceDiagram
     actor User as 사용자
-    participant Launcher as EXE / Python 운영 창
-    participant MFC as MFC 콘솔
-    participant Native as C++ Application
-    participant UE as Unreal 가상장비
-    participant Diag as Python 진단·검증
-    participant LLM as 로컬 LLM
-    participant Files as 보고서 파일
-
-    User->>Launcher: DeviceLinkDemo.exe 실행
-    Launcher->>LLM: 서버 시작·재사용 및 모델 준비
-    Launcher->>UE: 가상장비 시작·재사용
-    Launcher->>Native: 연결 → 첫 Telemetry 대기 → 전원·초기화
-    Native->>UE: 명령 전송 및 상태 요청
-    UE-->>Native: Ready / 고장 없음
-    Native-->>Launcher: 준비 확인
-    Launcher->>MFC: 콘솔 실행 및 자동 연결
-    User->>MFC: Pan 30 Tilt -10 입력 및 미리보기
-    MFC-->>User: Application이 해석한 실행 계획 표시
-    User->>MFC: 실행
-    MFC->>Native: 계획 재검증 및 worker 실행
-    Native->>UE: 각도 명령 전송
-    UE-->>Native: ACK·실제 각도 Telemetry
-    Native-->>MFC: 결과 큐 → PostMessage → 도달 상태 표시
-
-    User->>Launcher: MotorStall 고장 시연
-    Launcher->>Native: 고장 주입
-    Native->>UE: MotorStall 설정 및 관측 확인
-    Launcher->>Diag: diagnose_device(include_llm=true)
-    Diag->>Native: 새 Telemetry·이벤트 조회
-    Native-->>Diag: 관측된 Fault / MotorStall
-    Diag->>Diag: 매뉴얼 근거 검색
-    Diag->>LLM: 근거 내 확인·복구 절차 선택 요청
-    LLM-->>Diag: 인용이 포함된 제안
-    Diag->>Files: 진단 보고서 저장
-    Diag-->>Launcher: 진단 ID·근거·제안
-    Launcher->>Diag: 복구 전 새 Telemetry로 검증
-    Diag-->>Launcher: FAIL
-    Launcher->>Native: 가상 고장 해제
-    Native->>UE: 고장 해제 및 상태 확인
-    Launcher->>Diag: 동일 진단 ID로 새 Telemetry 검증
-    Diag->>Files: 검증 결과 추가 저장
-    Diag-->>Launcher: PASS — 더 늦은 Ready / 고장 없음 관측
-    Launcher-->>User: FAIL → PASS 및 보고서 경로
-    User->>Launcher: 시범운영 종료
-    Launcher->>Launcher: 직접 시작한 프로세스·하위 프로세스 정리
+    participant Start as 런처
+    participant UI as MFC
+    participant App as Application worker
+    participant UE as 가상장비
+    participant Diag as 읽기 전용 진단 helper
+    participant AI as 선택적 로컬 LLM
+    User->>Start: EXE 실행
+    Start->>UE: 패키지 우선 / 없으면 편집기 실행
+    Start->>UE: 첫 Telemetry·Ready 확인
+    Start->>UI: 실행·자동 연결
+    User->>UI: 요청 미리보기 → 실행
+    UI->>App: 계획 검증·비동기 실행
+    App->>UE: 명령·상태 조회
+    UE-->>App: ACK·Telemetry
+    App-->>UI: 큐 → PostMessage → 관측 결과
+    User->>UI: 현재 상태 진단
+    UI->>App: 새 Telemetry 요청
+    App->>UE: 상태 조회
+    UE-->>App: 관측값
+    App->>Diag: 관측값·이벤트 전달
+    Diag->>Diag: 매뉴얼 검색·기본 보고서 저장
+    opt AI 설명 선택
+        Diag->>AI: 모델 준비·근거 내 절차 선택
+        AI-->>Diag: 제안·인용
+    end
+    Diag-->>UI: 근거·설명·보고서 경로 (worker 큐 경유)
+    User->>UI: 명시적 복구 후 복구 검증
+    UI->>App: 동일 장비의 새 관측 요청
+    App->>Diag: 기준 진단 ID·더 늦은 관측
+    Diag-->>UI: PASS / FAIL / INCONCLUSIVE·보고서 갱신
 ```
 
-3D 화면은 운영 창에서 선택하며 선택값을 저장합니다. 로그·시연 이력·보고서는 `artifacts/demo/`에 기록합니다. **EXE는 프로젝트의 모델·Python·Unreal·빌드 결과를 사용하는 런처이므로 단독 배포본이 아닙니다.**
+## 최초 준비 / 재빌드
 
-### 새 PC 또는 재빌드
-
-Windows x64, Visual Studio C++/MFC·Windows SDK·CMake/Ninja, Unreal Engine 5.8, Python 3.11 이상이 필요합니다. 가상장비와 로컬 모델은 아래 사용서에 따라 먼저 준비합니다.
+Windows x64, Visual Studio C++/MFC·Windows SDK·CMake/Ninja, Python 3.11 이상이 필요합니다. 편집기 실행·가상장비 패키징에는 Unreal Engine 5.8이 필요합니다.
 
 ```powershell
 python -m venv mcp_server/.venv
 .\mcp_server\.venv\Scripts\python.exe -m pip install -r mcp_server/requirements-diagnostics.txt
-.\scripts\Setup-LocalDiagnosticLlm.ps1
 .\scripts\Build-DemoLauncher.ps1
+# AI 설명을 사용할 때만 설치
+.\scripts\Setup-LocalDiagnosticLlm.ps1
 ```
 
-- [Unreal 가상장비 준비](docs/UNREAL_VIRTUAL_DEVICE.md) · [로컬 LLM 설치·설정](docs/LOCAL_LLM_SETUP_KR.md)
-- 개별 실행: `run-unreal-virtual-device.bat`, `run-mfc-host.bat`
-- 기본 주소: 장비 `127.0.0.1:5000`, Ollama `127.0.0.1:11434`
-- 모델·가상환경·실행 파일·PC별 설정·생성 보고서는 Git에 포함하지 않습니다.
+패키징 경로는 `artifacts/package/Windows/UnrealVirtualDevice.exe`이며 `DEVICELINK_UNREAL_PACKAGE`로 지정할 수도 있습니다. **루트 EXE는 프로젝트의 Python·빌드 결과 등을 사용하는 런처이며 단독 배포본이 아닙니다.**
 
-## 진단과 현재 범위
+[Unreal 준비](docs/UNREAL_VIRTUAL_DEVICE.md) · [로컬 LLM](docs/LOCAL_LLM_SETUP_KR.md) · [자산 조사·패키징](docs/UNREAL_LIGHTWEIGHT_DEPLOYMENT_KR.md)
 
-`diagnose_device`는 기본적으로 모델을 호출하지 않습니다. AI 설명이 필요할 때만 `include_llm=true`를 지정합니다. 현재 런처는 모델도 자동 준비하며, 모델 시작을 선택 방식으로 바꾸는 작업은 진행 예정입니다.
+## 검증과 남은 작업
 
-AI는 **샘플 매뉴얼에 있는 절차를 선택·설명**합니다. 복구 판정은 같은 장비의 더 늦은 Telemetry에서 Ready·고장 없음을 확인한 결과이며, 물리적 수리 성공을 보증하지 않습니다.
-
-MFC의 요청·관측 진단은 구현했으며, **실제 화면 검증과 MFC 내 LLM 설명·매뉴얼 근거·보고서 연결은 미완료**입니다. Unreal 경량화·패키징을 포함한 진행 상황은 [통합 개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)에 기록합니다.
-
-## 검증
-
-2026-10-18 기준 C++ 회귀 시험 **5개**, Python 회귀 시험 **39개**가 통과했습니다. 기존 3D 시연에서는 실제 로컬 모델의 진단과 FAIL→PASS를 확인했습니다. 상세 조건과 한계는 [시연 검증 기록](docs/reports/DEMO_LAUNCHER_VALIDATION_2026-10-17_KR.md)을 참고하세요.
+2026-10-20: **C++ 6개·Python 49개 회귀 시험 통과**. MFC→Python의 실제 프로세스 호출·인용 보고서·복구 검증을 확인했습니다. 편집기 없는 최소 패키지의 연결·고장 진단·FAIL→PASS·종료도 통과했습니다. 실제 MFC 화면의 AI 응답 완료·DPI·키보드 탐색 검증은 남아 있습니다.
 
 ```powershell
 ctest --test-dir build-demo --output-on-failure
-.\mcp_server\.venv\Scripts\python.exe -m unittest tests.DeviceAgentMcpTests tests.DiagnosticAgentIntegrationTests tests.DemoLauncherTests
+.\mcp_server\.venv\Scripts\python.exe -m unittest tests.SnapshotDiagnosticTests tests.DeviceAgentMcpTests tests.DiagnosticAgentIntegrationTests tests.DemoLauncherTests
+# 준비된 가상장비에서 실제 고장 주입·해제를 수행하는 모델 없는 통합 시연
+.\mcp_server\.venv\Scripts\python.exe mcp_server/demo_launcher.py --smoke-basic
 ```
 
-C++ 시험 실행 파일은 CMake에서 해당 시험 대상을 먼저 빌드해야 합니다. MFC 창의 최종 배치·DPI·실제 입력 검증은 남아 있습니다.
+별도 최소 맵·패키지를 생성했으며 원본 자산은 보존했습니다. 추가 배포 검증·자산 정리·LangChain 의존성 단순화는 [개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)에서 추적합니다. 모델·가상환경·실행 파일·개인 설정·생성 보고서는 Git에 포함하지 않습니다.
 
-## 문서
-
-[아키텍처](docs/ARCHITECTURE.md) · [시험 절차](docs/TESTING_KR.md) · [MCP·자연어 운용](docs/DEVICE_AGENT_MCP_KR.md) · [로컬 LLM](docs/LOCAL_LLM_SETUP_KR.md) · [개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)
+[아키텍처](docs/ARCHITECTURE.md) · [시험 절차](docs/TESTING_KR.md) · [MCP 운용](docs/DEVICE_AGENT_MCP_KR.md)
