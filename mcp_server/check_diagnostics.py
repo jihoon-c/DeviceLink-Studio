@@ -25,7 +25,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "error_code": "invalid_configuration"}))
         return 1
     dependencies = {name: importlib.util.find_spec(name) is not None
-                    for name in ("pypdf", "langchain_openai")}
+                    for name in ("pypdf", "openai")}
     evidence = server._search_manual("MotorStall", 3)
     result = {"ok": all(dependencies.values()) and bool(config["model"]) and evidence["ok"],
               "provider": config["provider"], "model": config["model"],
@@ -38,7 +38,7 @@ def main() -> int:
         result["ok"] = False
     if arguments.live:
         # These inputs are explicitly synthetic; this checks integration, not diagnostic quality.
-        explanation = server._langchain_explanation(
+        explanation = server._llm_explanation(
             {"state": "Fault", "fault": "MotorStall", "synthetic_test": True}, [], evidence["matches"])
         result["request_sent"] = explanation["status"] in {"generated", "unavailable"}
         result["llm_explanation"] = explanation

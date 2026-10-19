@@ -77,6 +77,7 @@ class DiagnosticAgentIntegrationTests(unittest.TestCase):
         device.start()
         with tempfile.TemporaryDirectory(dir=ROOT) as directory, \
              local_api(self.proposal()) as requests, \
+             patch.dict(sys.modules, {'langchain_openai': None, 'langchain_core': None, 'langsmith': None}), \
              patch.dict(os.environ, {'DEVICELINK_AGENT_BRIDGE': str(BRIDGE),
                                      'DEVICELINK_AGENT_DB': str(Path(directory) / 'events.sqlite')}):
             reports = Path(directory) / 'reports'
@@ -171,34 +172,41 @@ class DiagnosticAgentIntegrationTests(unittest.TestCase):
                 self.assertEqual(result['error_code'], 'invalid_configuration')
 
     def test_model_refusal_and_truncated_output_are_not_proposals(self) -> None:
-        responses = [({'raw': types.SimpleNamespace(additional_kwargs={'refusal': 'no'}),
-                       'parsed': None}, 'refused'),
-                     ({'parsed': None, 'parsing_error': ValueError('truncated')}, 'invalid_response')]
-        for response, expected in responses:
+        responses = [('no', None, 'stop', 'refused'),
+                     (None, '{"possible_cause":', 'length', 'invalid_response'),
+                     (None, '{bad json}', 'stop', 'invalid_response'),
+                     (None, None, 'stop', 'invalid_response'),
+                     (None, '[]', 'stop', 'invalid_response'),
+                     (None, 'x' * 32769, 'stop', 'invalid_response')]
+        for refusal, content, finish_reason, expected in responses:
             model = unittest.mock.MagicMock()
-            model.return_value.with_structured_output.return_value.invoke.return_value = response
+            model.return_value.chat.completions.create.return_value = types.SimpleNamespace(choices=[
+                types.SimpleNamespace(finish_reason=finish_reason, message=types.SimpleNamespace(
+                    refusal=refusal, content=content))])
             with self.subTest(expected=expected), patch.dict(os.environ, {
                 'DEVICELINK_LLM_PROVIDER': 'openai', 'DEVICELINK_LLM_MODEL': 'test-model',
-                'OPENAI_API_KEY': 'test-key'}), patch('langchain_openai.ChatOpenAI', model):
+                'OPENAI_API_KEY': 'test-key'}), patch('openai.OpenAI', model):
                 result = llm_diagnostics.explain({}, [], [{'citation_id': 'E1'}])
                 self.assertEqual(result['error_code'], expected)
+                model.return_value.close.assert_called_once()
 
     def test_timeout_failure_is_sanitized(self) -> None:
         class APITimeoutError(Exception):
             pass
 
         model = unittest.mock.MagicMock()
-        model.return_value.with_structured_output.return_value.invoke.side_effect = APITimeoutError('secret fixture')
+        model.return_value.chat.completions.create.side_effect = APITimeoutError('secret fixture')
         with patch.dict(os.environ, {'DEVICELINK_LLM_PROVIDER': 'openai',
                                     'DEVICELINK_LLM_MODEL': 'test-model', 'OPENAI_API_KEY': 'test-key'}), \
-             patch('langchain_openai.ChatOpenAI', model):
+             patch('openai.OpenAI', model):
             result = llm_diagnostics.explain({}, [], [{'citation_id': 'E1'}])
         self.assertEqual(result, {'status': 'unavailable', 'error_code': 'timeout'})
+        model.return_value.close.assert_called_once()
 
     def test_missing_key_and_missing_evidence_do_not_invoke_model(self) -> None:
         with patch.dict(os.environ, {'DEVICELINK_LLM_MODEL': 'test-model',
                                     'DEVICELINK_LLM_PROVIDER': 'openai', 'OPENAI_API_KEY': ''}), \
-             patch('langchain_openai.ChatOpenAI') as model:
+             patch('openai.OpenAI') as model:
             self.assertEqual(llm_diagnostics.explain({}, [], [])['status'], 'skipped_no_manual_evidence')
             self.assertEqual(llm_diagnostics.explain({}, [], [{'citation_id': 'E1'}])['error_code'], 'api_key_missing')
             model.assert_not_called()
@@ -211,7 +219,7 @@ class DiagnosticAgentIntegrationTests(unittest.TestCase):
             with patch.object(bridge, 'call', side_effect=[{
                 'ok': True, 'device_id': 'test-device', 'observed_at_unix_ms': int(time.time() * 1000),
                 'telemetry': {'state': 'Fault', 'fault': 'MotorStall'}}, {'ok': True, 'events': []}]), \
-                 patch.object(server, '_langchain_explanation', return_value={'status': 'unavailable'}):
+                 patch.object(server, '_llm_explanation', return_value={'status': 'unavailable'}):
                 result = server.call_tool(bridge, 'diagnose_device', {})
             self.assertEqual(result['verdict'], 'OBSERVED')
             self.assertEqual(result['report']['status'], 'unavailable')

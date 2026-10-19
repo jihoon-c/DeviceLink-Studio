@@ -225,7 +225,7 @@ class McpServerTests(unittest.TestCase):
                 return {"ok": True, "events": [{"category": "frame-received", "detail": "type=28673"}]}
 
         bridge = FakeBridge()
-        with patch.object(self.server, '_langchain_explanation', side_effect=AssertionError('LLM must remain optional')) as model:
+        with patch.object(self.server, '_llm_explanation', side_effect=AssertionError('LLM must remain optional')) as model:
             result = self.server.call_tool(bridge, "diagnose_device", {})
             model.assert_not_called()
         self.assertEqual(result["verdict"], "OBSERVED")
@@ -274,58 +274,41 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(pdf["matches"][0]["page"], 1)
             self.assertIn("MotorStall", pdf["matches"][0]["excerpt"])
 
-    def test_langchain_explanation_keeps_manual_citations_and_cannot_set_verdict(self) -> None:
-        class FakeChatOpenAI:
-            def __init__(self, **kwargs: object) -> None:
-                self.model = kwargs["model"]
-
-            def with_structured_output(self, schema: dict[str, object], **kwargs: object) -> object:
-                self_test.assertEqual(kwargs, {"method": "json_schema", "strict": True, "include_raw": True})
-                self_test.assertEqual(schema["properties"]["citation_ids"]["items"]["enum"], ["E1"])
-                return self
-
-            def invoke(self, messages: list[tuple[str, str]]) -> object:
-                self_test.assertIn("E1", messages[1][1])
-                return {"parsed": {
-                    "possible_cause": "MotorStall",
-                    "recommended_checks": ["Read fresh telemetry"],
+    def test_sdk_explanation_keeps_manual_citations_and_cannot_set_verdict(self) -> None:
+        proposal = {"possible_cause": "MotorStall", "recommended_checks": ["Read fresh telemetry"],
                     "recovery_steps": ["Clear fault after authorization"],
-                    "citation_ids": ["E1"],
-                    "verdict": "PASS",
-                }}
-
-        self_test = self
-        fake_module = types.ModuleType("langchain_openai")
-        fake_module.ChatOpenAI = FakeChatOpenAI
+                    "citation_ids": ["E1"], "verdict": "PASS"}
+        model = unittest.mock.MagicMock()
+        model.return_value.chat.completions.create.return_value = types.SimpleNamespace(choices=[
+            types.SimpleNamespace(finish_reason='stop', message=types.SimpleNamespace(
+                refusal=None, content=json.dumps(proposal)))])
         evidence = [{"citation_id": "E1", "source": "devicelink://manual/fault-codes.md",
                      "excerpt": "MotorStall means a simulated motor fault"}]
         with patch.dict(os.environ, {"DEVICELINK_LLM_MODEL": "test-model"}), \
-             patch.dict(sys.modules, {"langchain_openai": fake_module}):
-            result = self.server._langchain_explanation(
+             patch('openai.OpenAI', model):
+            result = self.server._llm_explanation(
                 {"state": "Fault", "fault": "MotorStall"}, [], evidence)
         self.assertEqual(result["status"], "generated")
         self.assertEqual(result["proposal"]["citation_ids"], ["E1"])
         self.assertNotIn("verdict", result["proposal"])
+        request = model.return_value.chat.completions.create.call_args.kwargs
+        self.assertEqual(request['model'], 'test-model')
+        self.assertIn('E1', request['messages'][1]['content'])
+        schema = request['response_format']['json_schema']
+        self.assertTrue(schema['strict'])
+        self.assertEqual(schema['schema']['properties']['citation_ids']['items']['enum'], ['E1'])
+        model.return_value.close.assert_called_once()
 
-    def test_langchain_explanation_rejects_unknown_citation(self) -> None:
-        class FakeChatOpenAI:
-            def __init__(self, **kwargs: object) -> None:
-                pass
-
-            def with_structured_output(self, *args: object, **kwargs: object) -> object:
-                return self
-
-            def invoke(self, messages: list[tuple[str, str]]) -> object:
-                return {"parsed": {
-                    "possible_cause": "unknown", "recommended_checks": [],
-                    "recovery_steps": [], "citation_ids": ["E999"],
-                }}
-
-        fake_module = types.ModuleType("langchain_openai")
-        fake_module.ChatOpenAI = FakeChatOpenAI
+    def test_sdk_explanation_rejects_unknown_citation(self) -> None:
+        model = unittest.mock.MagicMock()
+        proposal = {"possible_cause": "unknown", "recommended_checks": [],
+                    "recovery_steps": [], "citation_ids": ["E999"]}
+        model.return_value.chat.completions.create.return_value = types.SimpleNamespace(choices=[
+            types.SimpleNamespace(finish_reason='stop', message=types.SimpleNamespace(
+                refusal=None, content=json.dumps(proposal)))])
         with patch.dict(os.environ, {"DEVICELINK_LLM_MODEL": "test-model"}), \
-             patch.dict(sys.modules, {"langchain_openai": fake_module}):
-            result = self.server._langchain_explanation({}, [], [{"citation_id": "E1"}])
+             patch('openai.OpenAI', model):
+            result = self.server._llm_explanation({}, [], [{"citation_id": "E1"}])
         self.assertEqual(result["status"], "unavailable")
 
     def test_recovery_verdict_requires_fresh_matching_telemetry(self) -> None:

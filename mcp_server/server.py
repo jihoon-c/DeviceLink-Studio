@@ -25,13 +25,13 @@ if __package__:
     from .manual_search import search_manual
     from .diagnostic_service import diagnose_device
     from .diagnostic_reports import DiagnosticReports
-    from .llm_diagnostics import explain as _langchain_explanation
+    from .llm_diagnostics import explain as _llm_explanation
 else:
     from instruction_service import execute_instruction
     from manual_search import search_manual
     from diagnostic_service import diagnose_device
     from diagnostic_reports import DiagnosticReports
-    from llm_diagnostics import explain as _langchain_explanation
+    from llm_diagnostics import explain as _llm_explanation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -394,7 +394,7 @@ def _diagnose_device(bridge: Bridge, timeout_ms: int, event_limit: int,
                      include_llm: bool = False) -> dict[str, Any]:
     return diagnose_device(bridge, timeout_ms, event_limit,
         fresh_telemetry=_fresh_telemetry, search_manual=_search_manual,
-        explain=_langchain_explanation if include_llm else None)
+        explain=_llm_explanation if include_llm else None)
 
 
 def _verify_recovery(bridge: Bridge, timeout_ms: int) -> dict[str, Any]:
