@@ -2,13 +2,13 @@
 
 ## 작업 상태
 
-구현 완료: MCP `get_recent_events`, `get_event_history`, `diagnose_device`, `verify_recovery`, `verify_diagnosis`; 브리지의 장비 ID·Telemetry 관측 시각; SQLite 장비 ID·시간 범위 조회; Markdown 절·PDF 페이지 검색과 문서 해시·인용 ID; 환경 변수로 활성화하는 LangChain 설명 어댑터. `diagnose_device`는 새 Telemetry, 영속 이벤트, 문서 근거를 함께 반환하며 장비 변경 명령을 호출하지 않는다. `verify_recovery`의 PASS는 **현재 Ready/None 상태 확인**만 뜻한다. `verify_diagnosis`는 이전 Fault와 이후 Ready/None 관측을 연결하지만 복구 명령의 인과관계는 주장하지 않는다.
+구현 완료: MCP `get_recent_events`, `get_event_history`, `diagnose_device`, `verify_recovery`, `verify_diagnosis`; 브리지의 장비 ID·Telemetry 관측 시각; SQLite 장비 ID·시간 범위 조회; Markdown 절·PDF 페이지 검색과 문서 해시·인용 ID; 선택적 SDK 설명 어댑터. `diagnose_device`는 새 Telemetry, 영속 이벤트, 문서 근거를 함께 반환하며 장비 변경 명령을 호출하지 않는다. `verify_recovery`의 PASS는 **현재 Ready/None 상태 확인**만 뜻한다. `verify_diagnosis`는 이전 Fault와 이후 Ready/None 관측을 연결하지만 복구 명령의 인과관계는 주장하지 않는다.
 
 2026-10-17 추가 완료: Ollama 휴대용 런타임 + `qwen3:4b` 로컬 호출, 매뉴얼 절차 목록에 제한한 한국어 제안, JSON Schema·인용·원문 절차 검증, 진단/검증 JSON·Markdown 영속 저장과 재시작 후 조회. 외부 API 키를 사용하지 않는 로컬 설정과 재현 스크립트는 [로컬 LLM 안내](LOCAL_LLM_SETUP_KR.md)에 기록했다. 실제 로컬 모델과 네이티브 브리지를 TCP 시험용 가상장비에 연결한 세 고장 사례가 복구 전 FAIL → 복구 후 PASS를 반환했다. Unreal·물리 장비나 실제 제조사 PDF를 검증한 결과는 아니다.
 
 추가 검증: 실제 DeviceLink Unreal 가상장비와 새 MCP stdio 프로세스, 로컬 LLM을 연결해 짐벌 이동과 세 고장의 FAIL→PASS, 서버 재시작 후 보고서 조회를 확인했다. Windows 한국어 stdio 인코딩을 수정했다. [검증 기록](reports/LOCAL_LLM_UNREAL_VALIDATION_2026-10-17_KR.md)에 현재 채팅의 캐시·연결 문제와 새 서버 프로세스의 통과 범위를 구분했다.
 
-다음 작업: 실제 제조사 매뉴얼을 확보하면 OCR·임베딩 검색 필요성과 절차 추출 품질 평가. 그래픽·카메라 화면 품질과 물리 장비 검증은 별도다. `get_recent_events`는 브리지 세션 메모리의 최대 256건이며, `get_event_history`는 SQLite에 남은 이력을 조회한다. LangChain 설명 실패 시 관측·근거·판정은 유지된다.
+다음 작업: 실제 제조사 매뉴얼을 확보하면 OCR·임베딩 검색 필요성과 절차 추출 품질 평가. 그래픽·카메라 화면 품질과 물리 장비 검증은 별도다. `get_recent_events`는 브리지 세션 메모리의 최대 256건이며, `get_event_history`는 SQLite에 남은 이력을 조회한다. LLM 설명 실패 시 관측·근거·판정은 유지된다.
 
 ## 목표와 범위
 
@@ -26,7 +26,7 @@
 | 판정 | 같은 장비의 최초 Fault와 이후 Ready/None 관측 비교; 보고서 영속 저장 | 시나리오 보고서와 통합한 운영 화면 검토 |
 | 자연어 | 로컬 LLM이 샘플 매뉴얼의 한국어 절차를 선택; 응답 실패 시 관측 결과 유지 | 실제 제조사 문서에 대해 절차 추출·선택 품질 평가 |
 
-현재 RAG는 키워드 검색과 로컬 LLM의 근거 절차 선택으로 구현했다. PDF 텍스트 추출과 LangChain 호출은 구현했고, OCR·임베딩·벡터 인덱스는 도입하지 않았다. 실제 모델의 임의 온도 기준·센서 교체 제안을 확인한 뒤 원문 절차 외 응답을 거부하도록 보강했다.
+현재 RAG는 키워드 검색과 로컬 LLM의 근거 절차 선택으로 구현했다. PDF 텍스트 추출과 SDK 직접 호출을 사용하며, OCR·임베딩·벡터 인덱스는 도입하지 않았다. 실제 모델의 임의 온도 기준·센서 교체 제안을 확인한 뒤 원문 절차 외 응답을 거부하도록 보강했다.
 
 ## 목표 구조
 
@@ -43,7 +43,7 @@ flowchart LR
     RULE --> REPORT
 ```
 
-진단 오케스트레이터는 MCP 서버 측의 별도 Python 구성요소로 둔다. LangChain은 문서 분할·검색·LLM 호출의 구현 선택지이며 C++ 계층의 의존성으로 넣지 않는다. 장비 접근은 기존 `DeviceLinkAgentBridge` → `DeviceAgentService` → Application 경계만 사용한다. 로그 조회도 Application 읽기 모델을 통해 제공하고 Python이 SQLite 파일을 직접 열지 않는다. Protocol과 Transport에는 진단 의미를 추가하지 않는다. MFC가 결과를 표시한다면 기존 이벤트 큐와 `PostMessage` 경로를 따른다.
+진단 오케스트레이터는 독립 Python 서비스로 두고 MCP 및 MFC 관측 helper가 공유한다. 2026-10-20에 LangChain을 제거하고 OpenAI SDK 직접 호출로 단순화했다. C++에는 Python SDK 의존성을 넣지 않는다. MCP 장비 접근은 기존 `DeviceLinkAgentBridge` → `DeviceAgentService` → Application 경계만 사용한다. 로그 조회도 Application 읽기 모델을 통해 제공하고 Python이 SQLite 파일을 직접 열지 않는다. MFC는 기존 장비 세션의 관측값을 helper에 전달하고 이벤트 큐와 `PostMessage` 경로로 결과를 표시한다. Protocol과 Transport에는 진단 의미를 추가하지 않는다.
 
 ## 진단 흐름과 계약
 

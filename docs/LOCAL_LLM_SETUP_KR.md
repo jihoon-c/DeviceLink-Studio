@@ -8,13 +8,18 @@ Ollama 휴대용 런타임과 `qwen3:4b`를 사용한다. 모델은 이 PC에서
 - 로컬 설정: `mcp_server/llm.local.json` (Git 제외, 비밀 정보 없음)
 - 진단 JSON·Markdown: `artifacts/diagnostics/` (Git 제외)
 - LLM 어댑터: `mcp_server/llm_diagnostics.py`
+- 호출 방식: OpenAI Python SDK의 Chat Completions 호환 API 직접 호출 (LangChain 불필요)
 - 영속 보고서: `mcp_server/diagnostic_reports.py`
 
 `llm.local.json`은 매 진단 시 읽으므로 모델명 변경에는 MCP 재시작이 필요 없다. Python 코드나 MCP 도구 목록을 변경한 뒤에는 Codex를 재시작한다.
 
 ## 시범운영 EXE
 
-프로젝트 루트의 `DeviceLinkDemo.exe`는 운영 창과 로컬 모델·Unreal 가상장비·MFC 관제를 함께 준비한다. 최초 환경 준비 후 `scripts/Build-DemoLauncher.ps1`로 생성한다. [README의 시범운영 사용 순서](../README.md#exe-하나로-시범운영)를 따른다. 운영 창의 LLM 진단은 기존 C++ 브리지를 사용하며 Codex 연결 없이도 실행된다. 시연 설정과 이력은 `artifacts/demo/`, 보고서는 그 아래 `reports/`에 저장한다.
+프로젝트 루트의 `DeviceLinkDemo.exe`는 가상장비·MFC를 준비한다. 기본 시작은 모델을 요구하지 않는다. 최초 환경 준비 후 `scripts/Build-DemoLauncher.ps1`로 생성하고 [README의 사용 순서](../README.md#실행)를 따른다.
+
+MFC의 **AI 설명 추가**를 선택하고 **현재 상태 진단**을 누르면, 별도 helper가 기존 세션의 관측값·이벤트를 받아 매뉴얼·기본 보고서를 저장하고 필요할 때만 로컬 모델을 준비한다. helper는 장비에 연결하거나 명령을 보내지 않는다. 직접 시작한 모델 서버는 처리 후 종료하고 기존 서버는 유지한다. 모델 실패 시 기본 진단·보고서는 남는다. 보고서는 `artifacts/demo/mfc-diagnostics/reports/`, MCP·CLI 시연 보고서는 `artifacts/demo/reports/`에 저장한다.
+
+SDK에 `response_format=json_schema`와 엄격한 스키마를 지정하는 방식은 [공식 API 문서](https://developers.openai.com/api/reference/python/resources/chat/subresources/completions/methods/create)를 따른다. 로컬 호환 서버의 출력은 별도로 검증한다. 거절·토큰 제한 종료·빈 응답·잘못된 JSON·크기 초과·미지원 인용·매뉴얼 밖 절차는 제안으로 채택하지 않는다. 클라이언트와 HTTP 연결은 성공·실패 모두 종료한다.
 
 ## 준비 및 실행
 

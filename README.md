@@ -12,6 +12,8 @@
 - MFC 운용/시험/이력 탭, 제한된 자연어의 미리보기·실행·중지
 - MFC 진단·매뉴얼 인용·JSON/Markdown 보고서·복구 검증, 선택적 로컬 AI 설명
 
+Python 진단은 SDK를 직접 호출하며 LangChain을 요구하지 않습니다.
+
 ## 실행
 
 준비된 이 PC에서는 루트의 **`DeviceLinkDemo.exe`**를 실행합니다.
@@ -96,7 +98,7 @@ python -m venv mcp_server/.venv
 
 ## 검증과 남은 작업
 
-2026-10-20: **C++ 6개·Python 49개 회귀 시험 통과**. MFC→Python의 실제 프로세스 호출·인용 보고서·복구 검증을 확인했습니다. 편집기 없는 최소 패키지의 연결·고장 진단·FAIL→PASS·종료도 통과했습니다. 실제 MFC 화면의 AI 응답 완료·DPI·키보드 탐색 검증은 남아 있습니다.
+2026-10-20: **C++ 6개·Python 49개 회귀 시험 통과**. 최소 패키지의 연결·각도 도달·진단·FAIL→PASS·종료를 확인했습니다. 실제 Qwen과 MFC용 helper의 모델 자동 준비·인용 보고서·복구 검증·모델 종료도 통과했습니다. 실제 MFC 화면의 AI 응답 완료·DPI·키보드 탐색 검증은 남아 있습니다.
 
 ```powershell
 ctest --test-dir build-demo --output-on-failure
@@ -105,6 +107,6 @@ ctest --test-dir build-demo --output-on-failure
 .\mcp_server\.venv\Scripts\python.exe mcp_server/demo_launcher.py --smoke-basic
 ```
 
-별도 최소 맵·패키지를 생성했으며 원본 자산은 보존했습니다. 추가 배포 검증·자산 정리·LangChain 의존성 단순화는 [개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)에서 추적합니다. 모델·가상환경·실행 파일·개인 설정·생성 보고서는 Git에 포함하지 않습니다.
+별도 최소 맵·패키지를 생성했으며 원본 자산은 보존했습니다. 추가 화면·통신 장애 검증과 자산 정리는 [개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)에서 추적합니다. 모델·가상환경·실행 파일·개인 설정·생성 보고서는 Git에 포함하지 않습니다.
 
 [아키텍처](docs/ARCHITECTURE.md) · [시험 절차](docs/TESTING_KR.md) · [MCP 운용](docs/DEVICE_AGENT_MCP_KR.md)
