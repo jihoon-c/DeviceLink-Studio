@@ -52,6 +52,9 @@ class FakePlatform:
     def close_process(self, process):
         self.closed.append(process.pid)
         process.exited = True
+        if any(launched is process and args[0].endswith('unreal.exe')
+               for args, launched, _ in self.launched):
+            self.ports[5000] = False
 
 
 class DemoLauncherTests(unittest.TestCase):
@@ -172,6 +175,14 @@ class DemoLauncherTests(unittest.TestCase):
             self.assertGreater(calls.index('power_on'), max(
                 index for index, name in enumerate(calls) if name == 'get_telemetry'))
             self.session.stop()
+
+    def test_stop_waits_for_packaged_device_listener_to_close(self) -> None:
+        process = FakeProcess(1000)
+        self.session.owned.append(('unreal', process))
+        with patch.object(self.platform, 'port_open', side_effect=[True, False]) as port_open:
+            self.session.stop()
+        self.assertEqual(port_open.call_count, 2)
+        self.assertEqual(self.session.owned, [])
 
     def test_basic_start_does_not_require_or_contact_model(self) -> None:
         self.platform.model_available = False

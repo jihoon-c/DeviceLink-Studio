@@ -1,11 +1,10 @@
 services:
   jenkins:
-    image: jenkins/jenkins:lts-jdk17
+    image: jenkins/jenkins:lts-jdk21
     container_name: devicelink-jenkins
     restart: unless-stopped
     ports:
-      - "8080:8080"
-      - "50000:50000"
+      - "127.0.0.1:8080:8080"
     volumes:
       - jenkins_home:/var/jenkins_home
 

@@ -8,6 +8,7 @@
 /.codex/
 /.ppt-build/
 /artifacts/
+/ci-artifacts/
 *.blend1
 *.pre-support-fix.blend
 /run-integration-demo.lnk

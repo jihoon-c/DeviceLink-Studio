@@ -336,6 +336,13 @@ class DemoSession:
         for name, process in reversed(self.owned):
             try:
                 self.platform.close_process(process)
+                if name == 'unreal':
+                    # The packaged bootstrapper can exit before the game process releases its listener.
+                    deadline = time.monotonic() + 5
+                    while self.platform.port_open(5000):
+                        if time.monotonic() >= deadline:
+                            raise OSError('The virtual device did not release TCP port 5000.')
+                        time.sleep(0.1)
                 self._event(name, '런처가 시작한 프로세스 종료', 'stopped')
             except (OSError, subprocess.SubprocessError):
                 errors.append(name)

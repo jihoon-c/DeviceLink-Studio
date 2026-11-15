@@ -104,8 +104,10 @@ class DemoWindow:
         def work() -> None:
             try:
                 if operation == 'start':
-                    if self.session.ready:
+                    if self.session.owned or self.session.ready:
                         self.session.stop()
+                        if self.session.owned:
+                            raise RuntimeError('이전 시범운영을 종료하지 못했습니다. 종료 후 다시 시도하세요.')
                     result = self.session.start(visual_device=visual)
                 else:
                     result = getattr(self.session, operation)()

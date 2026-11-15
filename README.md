@@ -88,6 +88,8 @@ Windows x64, Visual Studio C++/MFC·Windows SDK·CMake/Ninja, Python 3.11 이상
 python -m venv mcp_server/.venv
 .\mcp_server\.venv\Scripts\python.exe -m pip install -r mcp_server/requirements-diagnostics.txt
 .\scripts\Build-DemoLauncher.ps1
+# 준비된 가상장비 패키지가 없다면 설치된 Unreal Engine 경로를 지정합니다.
+.\scripts\Package-VirtualDevice.ps1 -EngineRoot 'F:\UE_5.8'
 # AI 설명을 사용할 때만 설치
 .\scripts\Setup-LocalDiagnosticLlm.ps1
 ```
@@ -98,10 +100,15 @@ python -m venv mcp_server/.venv
 
 ## 검증과 남은 작업
 
+2026-11-14 배포 후보는 [Windows 배포 후보 검증 기록](docs/reports/WINDOWS_RELEASE_CANDIDATE_2026-11-14_KR.md)에서 확인할 수 있습니다.
+
 2026-10-20: **C++ 6개·Python 49개 회귀 시험 통과**. 최소 패키지의 연결·각도 도달·진단·FAIL→PASS·종료를 확인했습니다. 실제 Qwen과 MFC용 helper의 모델 자동 준비·인용 보고서·복구 검증·모델 종료도 통과했습니다. 실제 MFC 화면의 AI 응답 완료·DPI·키보드 탐색 검증은 남아 있습니다.
 
 ```powershell
+# 전체 회귀 시험을 실행하기 전에 런처 빌드에 사용한 Visual Studio 개발 셸에서 테스트도 빌드합니다.
+cmake --build build-demo --parallel
 ctest --test-dir build-demo --output-on-failure
+$env:DEVICELINK_AGENT_BRIDGE = (Resolve-Path .\build-demo\DeviceLinkAgentBridge.exe).Path
 .\mcp_server\.venv\Scripts\python.exe -m unittest tests.SnapshotDiagnosticTests tests.DeviceAgentMcpTests tests.DiagnosticAgentIntegrationTests tests.DemoLauncherTests
 # 준비된 가상장비에서 실제 고장 주입·해제를 수행하는 모델 없는 통합 시연
 .\mcp_server\.venv\Scripts\python.exe mcp_server/demo_launcher.py --smoke-basic
@@ -110,3 +117,7 @@ ctest --test-dir build-demo --output-on-failure
 별도 최소 맵·패키지를 생성했으며 원본 자산은 보존했습니다. 추가 화면·통신 장애 검증과 자산 정리는 [개선 계획](docs/SIMPLIFICATION_MFC_INTEGRATION_PLAN_KR.md)에서 추적합니다. 모델·가상환경·실행 파일·개인 설정·생성 보고서는 Git에 포함하지 않습니다.
 
 [아키텍처](docs/ARCHITECTURE.md) · [시험 절차](docs/TESTING_KR.md) · [MCP 운용](docs/DEVICE_AGENT_MCP_KR.md)
+
+## CI/CD
+
+GitHub Actions는 push·PR에서 Windows 회귀 시험을 실행합니다. Jenkins는 같은 시험을 실행한 뒤 Windows 에이전트에서 Unreal 패키지를 만들고, 배포 ZIP을 다시 풀어 MotorStall 주입과 복구를 검증합니다. 통과한 ZIP과 SHA-256은 Jenkins에 보관하며, 버전 태그를 지정해 GitHub Release 초안을 만들 수 있습니다. [CI/CD 설계와 시연](docs/CICD_PORTFOLIO_KR.md) · [Jenkins 설정](docs/JENKINS_SETUP_KR.md)

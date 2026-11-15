@@ -1,3 +1,8 @@
+param(
+    [switch]$RunTests,
+    [string]$TestResultsDirectory = 'ci-artifacts'
+)
+
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $buildDirectory = Join-Path $workspace 'build-demo'
@@ -23,6 +28,7 @@ $vcvars = Join-Path $installation 'VC\Auxiliary\Build\vcvars64.bat'
 if (-not $cmake -or -not $ninja) { throw 'Visual Studio CMake and Ninja tools are required.' }
 New-Item -ItemType Directory -Path $buildDirectory -Force | Out-Null
 $batch = Join-Path $buildDirectory 'build-demo.cmd'
+$buildTargets = if ($RunTests) { '--parallel' } else { '--target DeviceLinkDemo DeviceLinkMfcHost DeviceLinkAgentBridge' }
 $commands = @(
     '@echo off',
     'chcp 65001 >nul',
@@ -31,7 +37,7 @@ $commands = @(
     'if errorlevel 1 exit /b 1',
     ('"{0}" --fresh -S "{1}" -B "{2}" -G Ninja -DCMAKE_MAKE_PROGRAM="{3}" -DCMAKE_BUILD_TYPE=Release -DDEVICELINK_BUILD_MFC_HOST=ON -DPython3_EXECUTABLE="{1}\mcp_server\.venv\Scripts\python.exe"' -f $cmake, $workspace, $buildDirectory, $ninja),
     'if errorlevel 1 exit /b 1',
-    ('"{0}" --build "{1}" --target DeviceLinkDemo DeviceLinkMfcHost DeviceLinkAgentBridge' -f $cmake, $buildDirectory),
+    ('"{0}" --build "{1}" {2}' -f $cmake, $buildDirectory, $buildTargets),
     'exit /b %errorlevel%'
 )
 $commands -join "`r`n" | Set-Content -LiteralPath $batch -Encoding OEM
@@ -43,3 +49,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Demo launcher build failed. See $buildLog"
 }
 Write-Output "Ready: $(Join-Path $workspace 'DeviceLinkDemo.exe')"
+
+if ($RunTests) {
+    $results = New-Item -ItemType Directory -Path $TestResultsDirectory -Force
+    $ctest = Join-Path (Split-Path $cmake -Parent) 'ctest.exe'
+    & $ctest --test-dir $buildDirectory --output-on-failure --no-tests=error --output-junit (Join-Path $results.FullName 'ctest.xml')
+    if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
+}

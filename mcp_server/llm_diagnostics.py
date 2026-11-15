@@ -115,9 +115,10 @@ def explain(telemetry: dict[str, Any], events: list[dict[str, Any]],
         ]
         with ExitStack() as stack:
             if config["provider"] == "local":
-                import httpx
+                from openai import DefaultHttpx2Client
+
                 # Loopback calls must not traverse a user-configured HTTP proxy.
-                options["http_client"] = stack.enter_context(httpx.Client(trust_env=False))
+                options["http_client"] = stack.enter_context(DefaultHttpx2Client(trust_env=False))
             client = OpenAI(**options)
             stack.callback(client.close)
             response = client.chat.completions.create(model=model_name, messages=messages,
